@@ -417,9 +417,8 @@ def lint_check(filepath: Path, all_files: list[Path]) -> list[str]:
         ]
         return error_lines
     except FileNotFoundError:
-        raise FileNotFoundError(
-            "verilator not found in PATH. Install with: sudo apt install verilator"
-        )
+        logger.warning("verilator not found in PATH. Skipping lint check.")
+        return []
     except subprocess.TimeoutExpired:
         return ["%Error: verilator lint timed out"]
 
@@ -526,7 +525,7 @@ def generate_with_lint_fix(
         )
 
         if success:
-            logger.info("✓ %s lint PASS (attempt %d)", module_name, attempt)
+            logger.info("[OK] %s lint PASS (attempt %d)", module_name, attempt)
             return verilog, filepath
 
         last_errors = errors

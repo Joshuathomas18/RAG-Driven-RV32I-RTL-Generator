@@ -166,9 +166,9 @@ def step_generate(args) -> list[Path]:
                 max_iterations=args.max_iterations,
             )
             accepted_files.append(filepath)
-            print(f"  ✓ {module_name}.v generated and lint-clean")
+            print(f"  [OK] {module_name}.v generated and lint-clean")
         except LintFailureError as e:
-            print(f"  ✗ {module_name}.v FAILED lint after {e.attempts} attempts:")
+            print(f"  [FAIL] {module_name}.v FAILED lint after {e.attempts} attempts:")
             for err in e.errors[:5]:
                 print(f"      {err}")
             failed_modules.append(module_name)
@@ -177,7 +177,7 @@ def step_generate(args) -> list[Path]:
             if partial_path.exists():
                 accepted_files.append(partial_path)
         except Exception as e:
-            print(f"  ✗ {module_name}.v FAILED with exception: {e}")
+            print(f"  [FAIL] {module_name}.v FAILED with exception: {e}")
             failed_modules.append(module_name)
 
     print(f"\n  Generated: {len(accepted_files)} files")

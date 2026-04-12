@@ -1,0 +1,12 @@
+# Environment
+.env
+
+# Data and Models
+data/model_cache/
+
+# Python artifacts
+**/__pycache__/
+*.pyc
+
+# Distribution specific logs
+results/generation_log.jsonl
