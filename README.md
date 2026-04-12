@@ -1,0 +1,102 @@
+# RAG-Driven RV32I RTL Generator
+
+A RAG (Retrieval-Augmented Generation) pipeline that generates correct Verilog RTL for a 5-stage in-order RV32I processor, verifies every file with Verilator lint (automated fix loop), simulates with Verilator, and validates against 42 riscv-tests.
+
+```
+                 ┌──────────────┐
+  RTL Sources    │  ChromaDB    │
+  PicoRV32  ───► │  rtl_corpus  │
+  Ibex      ───► │  (CodeBERT)  │◄─── retrieve(component, query)
+  Angelo    ───► │              │
+                 └──────────────┘          ┌─────────────────┐
+                                           │  LLM Generator  │
+                 ┌──────────────┐          │  claude-sonnet  │
+  Bug Patterns  │  knowledge_  │          │  temp=0.05      │
+  Debug Lessons ►│  corpus      │◄─────────│  max_tokens=6k  │
+  Angelo Hints  │  (MiniLM)    │          └────────┬────────┘
+                 └──────────────┘                   │
+                                                    ▼
+                                           ┌─────────────────┐
+                                           │  Verilator Lint │
+                                           │  Fix Loop       │
+                                           │  (max 5 iters)  │
+                                           └────────┬────────┘
+                                                    │ .v files
+                                                    ▼
+                                           ┌─────────────────┐
+                                           │  Verilator Sim  │
+                                           │  42 ISA Tests   │
+                                           └─────────────────┘
+```
+
+## Prerequisites
+
+```bash
+# Verilator
+sudo apt install verilator
+
+# RISC-V toolchain
+sudo apt install gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf
+
+# Python 3.11+
+python3 --version
+```
+
+## Quick Start
+
+```bash
+git clone <this-repo>
+cd RAG-Driven-RV32I-RTL-Generator
+pip install -r requirements.txt
+cp .env.example .env
+# Edit .env — set ANTHROPIC_API_KEY
+python scripts/run_pipeline.py
+```
+
+## Module Descriptions
+
+| Module | Purpose |
+|--------|---------|
+| `rag/corpus.py` | Clone PicoRV32/Ibex/Angelo repos, extract Verilog modules, embed with CodeBERT, store in ChromaDB |
+| `rag/knowledge.py` | Embed 28 bug patterns + debug lessons + Angelo patterns with MiniLM |
+| `rag/pipeline.py` | Hybrid retrieval: deterministic by module name + BM25+semantic fallback |
+| `rag/generator.py` | LLM generation with Verilator lint-fix loop (max 5 iterations) |
+| `scripts/run_pipeline.py` | Main entry: build corpus → generate 9 modules → compile → test |
+| `sim/sim_main.cpp` | Verilator C++ testbench (reset 10 cycles, run 500k cycles) |
+| `sim/run_tests.py` | Run all 42 rv32ui-p-* riscv-tests, detect PASS via JAL-self-loop |
+
+## Running Tests
+
+```bash
+# After generating RTL:
+pytest tests/test_lint.py -v
+
+# Run ISA tests standalone:
+python sim/run_tests.py
+
+# Skip corpus/knowledge rebuild (use existing ChromaDB):
+python scripts/run_pipeline.py --skip-corpus --skip-knowledge
+
+# Generate only specific modules:
+python scripts/run_pipeline.py --modules alu,regfile,decoder
+```
+
+## Results
+
+After a full run:
+- `results/generation_log.jsonl` — per-attempt generation log (module, attempt, errors, tokens)
+- `results/isa_results.md` — pass/fail table for all 42 ISA tests
+
+## Troubleshooting
+
+**Verilator not found:** `sudo apt install verilator`
+
+**RISC-V toolchain not found:** `sudo apt install gcc-riscv64-unknown-elf`
+
+**riscv-tests not found:** Script will auto-clone from GitHub into `data/riscv-tests/`. Pre-built ELFs are included in the repo.
+
+**ChromaDB errors:** Delete `data/chromadb/` and re-run to rebuild from scratch.
+
+**HuggingFace model download slow:** Models cache to `data/model_cache/` (set via `HF_HOME`). First run downloads ~500MB (CodeBERT) + ~90MB (MiniLM).
+
+**ANTHROPIC_API_KEY not set:** Copy `.env.example` to `.env` and set your key.
