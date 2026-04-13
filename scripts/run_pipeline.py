@@ -16,6 +16,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -63,6 +64,7 @@ RTL_DIR = REPO_ROOT / "rtl" / "generated"
 SIM_DIR = REPO_ROOT / "sim"
 OBJ_DIR = SIM_DIR / "obj_dir"
 RESULTS = REPO_ROOT / "results"
+GROQ_SLEEP_SECONDS = int(os.environ.get("GROQ_SLEEP_SECONDS", "45"))
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
@@ -79,8 +81,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--skip-tests",      action="store_true", help="Skip ISA tests")
     p.add_argument("--modules",         type=str, default=None,
                    help="Comma-separated list of modules to generate (default: all)")
-    p.add_argument("--max-iterations",  type=int, default=5,
-                   help="Lint-fix iterations per module (default: 5)")
+    p.add_argument("--max-iterations",  type=int, default=1,
+                   help="Lint-fix iterations per module (default: 1, Groq-only single-call mode)")
     p.add_argument("--force-rebuild",   action="store_true",
                    help="Force rebuild of ChromaDB collections")
     p.add_argument("--log-level",       default="INFO",
@@ -163,7 +165,7 @@ def step_generate(args) -> list[Path]:
                 module_name=module_name,
                 component=component,
                 all_files=accepted_files,
-                max_iterations=args.max_iterations,
+                max_iterations=3,
             )
             accepted_files.append(filepath)
             print(f"  [OK] {module_name}.v generated and lint-clean")
@@ -179,6 +181,10 @@ def step_generate(args) -> list[Path]:
         except Exception as e:
             print(f"  [FAIL] {module_name}.v FAILED with exception: {e}")
             failed_modules.append(module_name)
+
+        if module_name != modules_to_generate[-1]:
+            print(f"  Sleeping {GROQ_SLEEP_SECONDS}s to respect Groq rate limits...")
+            time.sleep(GROQ_SLEEP_SECONDS)
 
     print(f"\n  Generated: {len(accepted_files)} files")
     if failed_modules:
@@ -311,8 +317,7 @@ def _check_tool(name: str) -> bool:
 
 
 def _check_api_key() -> bool:
-    key = os.environ.get("ANTHROPIC_API_KEY", "")
-    return bool(key and not key.startswith("sk-ant-..."))
+    return bool(os.environ.get("OPENROUTER_API_KEY", ""))
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -328,8 +333,8 @@ def main() -> int:
     # Pre-flight checks
     if not args.skip_generation:
         if not _check_api_key():
-            print("ERROR: ANTHROPIC_API_KEY not set or is placeholder.")
-            print("       Copy .env.example to .env and set your API key.")
+            print("ERROR: No valid OpenRouter API key found.")
+            print("       Set OPENROUTER_API_KEY in .env.")
             return 1
 
     if not _check_tool("verilator") and not args.skip_sim:
