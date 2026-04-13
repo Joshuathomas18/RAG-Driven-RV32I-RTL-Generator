@@ -53,9 +53,11 @@ RV32UI_TESTS = [
     "ma_data",
     "ebreak",
     "ecall",
+    "ld_st",
+    "st_ld",
 ]
 
-assert len(RV32UI_TESTS) == 42, f"Expected 42 tests, got {len(RV32UI_TESTS)}"
+assert len(RV32UI_TESTS) == 44, f"Expected 44 tests, got {len(RV32UI_TESTS)}"
 
 
 # ── riscv-tests location ───────────────────────────────────────────────────────
@@ -100,10 +102,19 @@ def try_clone_riscv_tests() -> Optional[Path]:
     if isa_dir.exists() and (isa_dir / "rv32ui-p-add").exists():
         return isa_dir
 
+    if dest.exists():
+        print(f"Directory {dest} exists but is incomplete. cleaning up...")
+        import shutil
+        try:
+            shutil.rmtree(dest)
+        except Exception as e:
+            print(f"WARNING: Could not remove {dest}: {e}")
+
     print("Cloning riscv-tests (precompiled ELFs in isa/)...")
     try:
         subprocess.run(
-            ["git", "clone", "--depth=1",
+            ["git", "clone", "--depth=1", 
+             "--filter=blob:none", # efficient clone
              "https://github.com/riscv-software-src/riscv-tests.git",
              str(dest)],
             check=True,

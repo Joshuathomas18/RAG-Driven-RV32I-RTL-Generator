@@ -78,7 +78,7 @@ CRITICAL SIMULATION LESSONS (MUST FOLLOW):
    Code: alu_in_a = id_ex_is_auipc ? id_ex_pc : id_ex_rs1_data;
 
 3. BRANCH FUNCT3: branch_unit receives instr[14:12] directly as branch_funct3.
-   Never derive from alu_op bits (alu_op[2:0] != funct3 for branches).
+   Never derive from alu_op bits. branch_funct3 = instr[14:12].
 
 4. FORWARDING REGISTERS: hazard_unit inputs are rs1_addr[4:0], rs2_addr[4:0]
    (register ADDRESSES). Never use rs1_data[4:0] (would be wrong bits).
@@ -90,7 +90,8 @@ CRITICAL SIMULATION LESSONS (MUST FOLLOW):
    wb_sel=2'b10 selects pc_plus4 in MEM/WB stage.
 
 7. WB_SEL TIMING: wb_sel travels in SAME pipeline register as its data.
-   Never register wb_sel or pc_plus4 in separate always blocks.
+   Pipeline chain: id_ex_wb_sel -> ex_mem_wb_sel -> mem_wb_wb_sel.
+   Never register wb_sel or pc_plus4 in separate always blocks or skip stages.
 
 8. CSR MHARTID: Always return 32'h0 for mhartid (0xF14). Core crashes otherwise.
 
@@ -131,7 +132,7 @@ Async read: assign rdata1 = (rs1 == 0) ? 0 : regs[rs1];""",
 
     "decoder": """\
 Generate a purely combinational instruction decoder module `decoder` for all 11 RV32I opcodes.
-Ports: input [31:0] inst;
+Ports: input [31:0] instr;
        output [4:0] rs1, rs2, rd;
        output [31:0] imm;
        output [3:0] alu_op;
@@ -142,16 +143,17 @@ Ports: input [31:0] inst;
        output [1:0] wb_sel;   // 00=alu 01=mem 10=pc+4 11=csr
        output branch, jump;   // branch=BRANCH opcode, jump=JAL/JALR
        output is_auipc;       // AUIPC: ALU A must be PC
-       output [2:0] branch_funct3; // inst[14:12] for branch comparator
-       output [2:0] funct3;   // inst[14:12] for load/store operations (LSU mem_op)
+       output [2:0] branch_funct3; // instr[14:12] for branch comparator
+       output [2:0] funct3;   // instr[14:12] for load/store operations (LSU mem_op)
        output csr_en;         // SYSTEM opcode detected
-       output [11:0] csr_addr;// inst[31:20] for CSR operations
-       output [2:0] csr_op;   // inst[14:12] for CSR operations
+       output [11:0] csr_addr;// instr[31:20] for CSR operations
+       output [2:0] csr_op;   // instr[14:12] for CSR operations
        output [31:0] csr_wdata; // CSR write data (rs1 or immediate)
-Use a single always@(*) with defaults first, then case(inst[6:0]).
+Use a single always@(*) with defaults first, then case(instr[6:0]).
 Handle all immediates (I/S/B/U/J types) with correct sign extension.
 Handle all 11 opcodes: RTYPE, ITYPE, LOAD, STORE, BRANCH, JAL, JALR, LUI, AUIPC, SYSTEM, FENCE.
-CRITICAL: Output funct3 = inst[14:12] for LSU mem_op (load/store size control).""",
+CRITICAL: Output funct3 = instr[14:12] for LSU mem_op (load/store size control).
+CRITICAL: Output branch_funct3 = instr[14:12] for branch resolution.""",
 
     "branch_unit": """\
 Generate a combinational Verilog module `branch_unit` for branch and jump resolution.
@@ -381,7 +383,7 @@ def _call_openrouter_api(system: str, messages: list[dict], model: str) -> tuple
     if not api_key:
         raise RuntimeError("OPENROUTER_API_KEY not set")
 
-    url = "https://openrouter.ai/v1/chat/completions"
+    url = "https://openrouter.ai/api/v1/chat/completions"
     payload = {
         "model": os.environ.get("OPENROUTER_MODEL", "gpt-4o-mini"),
         "messages": [
@@ -395,7 +397,9 @@ def _call_openrouter_api(system: str, messages: list[dict], model: str) -> tuple
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "User-Agent": "python-openrouter-client/1.0",
+        "HTTP-Referer": "https://github.com/google-deepmind/antigravity",
+        "X-Title": "Antigravity RTL Generator",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     }
     request = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
@@ -528,6 +532,71 @@ Requirements:
     return verilog, token_count
 
 
+def generate_module_with_header(
+    module_name: str,
+    spec: str,
+    header: str,
+    rtl_context: list[dict],
+    knowledge_context: list[dict],
+) -> tuple[str, int]:
+    """Phase 3: Generate full module body using the locked header context."""
+    rtl_ctx_text = _format_rtl_context(rtl_context)
+    know_ctx_text = _format_knowledge_context(knowledge_context)
+
+    user_prompt = f"""\
+Generate the full Verilog module: {module_name}
+Using this EXACT header signature:
+{header}
+
+SPECIFICATION:
+{spec}
+
+REFERENCE RTL:
+{rtl_ctx_text}
+
+RELEVANT BUG PATTERNS:
+{know_ctx_text}
+
+Requirements:
+- Use the exact ports provided in the header.
+- Return ONLY the complete Verilog module code in a ```verilog block.
+- Follow ALL rules in the hardware contract.
+"""
+    response_text, tokens = _call_llm(
+        system=GLOBAL_CONTRACT,
+        messages=[{"role": "user", "content": user_prompt}],
+        model=MODEL,
+    )
+    verilog = _extract_verilog(response_text)
+    return verilog, tokens
+
+
+def _generate_header(module_name: str, spec: str) -> tuple[str, int]:
+    """Phase 1: Generate only the Verilog module header."""
+    prompt = f"""\
+Generate ONLY the Verilog module header (module name + complete port declarations) for: {module_name}
+Ending with ');'. DO NOT generate any internal logic or 'endmodule'.
+
+SPECIFICATION:
+{spec}
+
+Requirements:
+- Return ONLY the header code in a ```verilog block.
+- Follow the hardware contract for port names and types.
+"""
+    response_text, tokens = _call_llm(
+        system=GLOBAL_CONTRACT,
+        messages=[{"role": "user", "content": prompt}],
+        model=MODEL,
+    )
+    header = _extract_verilog(response_text)
+    # Ensure it ends at );
+    idx = header.find(");")
+    if idx != -1:
+        header = header[:idx+2]
+    return header, tokens
+
+
 def lint_check(filepath: Path, all_files: list[Path]) -> list[str]:
     """
     Run Verilator lint-only on filepath plus all_files for cross-module resolution.
@@ -599,16 +668,23 @@ def generate_with_lint_fix(
     RTL_DIR.mkdir(parents=True, exist_ok=True)
     filepath = RTL_DIR / f"{module_name}.v"
 
-    logger.info("Generating module: %s (component=%s)", module_name, component)
-
-    # Retrieve combined RTL context from the full corpus rather than narrow component-only references.
-    # This lets the generator see all relevant module logic together before producing each .v file.
-    rtl_context = retrieve("all", spec)
+    # Phase 1: Header generation
+    logger.info("Phase 1: Generating header for %s...", module_name)
+    header, header_tokens = _generate_header(module_name, spec)
+    
+    # Phase 2: Enhanced retrieval using header info
+    logger.info("Phase 2: Retrieving context with header hint...")
+    retrieval_query = f"Module {module_name} with ports: {header}"
+    rtl_context = retrieve(component, retrieval_query)
     knowledge_context = query_knowledge(spec)
-    logger.debug("Retrieved %d RTL docs, %d knowledge docs", len(rtl_context), len(knowledge_context))
-
-    # Initial generation
-    verilog, tokens = generate_module(module_name, spec, rtl_context, knowledge_context)
+    
+    # Phase 3: Full body generation
+    logger.info("Phase 3: Generating full module body...")
+    verilog, body_tokens = generate_module_with_header(
+        module_name, spec, header, rtl_context, knowledge_context
+    )
+    tokens = header_tokens + body_tokens
+    
     filepath.write_text(_normalize_verilog_text(verilog), encoding="utf-8")
     logger.info("Generated %s (%d tokens)", module_name, tokens)
 
