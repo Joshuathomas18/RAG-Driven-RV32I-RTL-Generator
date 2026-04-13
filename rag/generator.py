@@ -1,6 +1,6 @@
 """
 LLM-based Verilog generator with Verilator lint-fix feedback loop.
-Uses claude-sonnet-4-6 via the Anthropic API.
+Uses OpenRouter OpenAI-compatible chat completions API.
 """
 
 import json
@@ -8,14 +8,17 @@ import logging
 import os
 import re
 import subprocess
+import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-import anthropic
 from dotenv import load_dotenv
 
 from rag.pipeline import retrieve, query_knowledge
+from rag.validator import validate
 
 load_dotenv()
 
@@ -25,7 +28,7 @@ REPO_ROOT = Path(os.getenv("REPO_ROOT", Path(__file__).parent.parent))
 RTL_DIR   = REPO_ROOT / "rtl" / "generated"
 LOG_FILE  = REPO_ROOT / "results" / "generation_log.jsonl"
 
-MODEL        = "claude-sonnet-4-6"
+MODEL        = "llama-3.3-70b-versatile"
 TEMPERATURE  = 0.05
 MAX_TOKENS   = 6000
 
@@ -65,19 +68,47 @@ MEM/WB register CRITICAL: alu_result, load_data, rd_addr, reg_write,
 wb_sel[1:0], pc_plus4 MUST ALL update in the SAME always block.
 Never register wb_sel or pc_plus4 separately from the data signals.
 
-CRITICAL RULES:
-1. ALU operand A = PC for AUIPC/JAL/BRANCH, rs1 otherwise
-2. Branch type = funct3 directly, NOT alu_op bits
-3. Pipeline rs1_addr/rs2_addr as separate 5-bit wires (not [4:0] of data)
-4. Flush using branch_taken_ex (direct EX output), NOT registered signal
-5. wb_sel travels inside pipeline register WITH its instruction
-6. pc_plus4 pipelined all the way to MEM/WB for JAL writeback
-7. Unified memory array (single reg[31:0] mem[0:65535]) for fence.i
-8. CSR stub: mhartid=0, silent writes, wb_sel=2'b11
+CRITICAL SIMULATION LESSONS (MUST FOLLOW):
+=========================================
+
+1. MEMORY SIZE: Use reg [31:0] mem [0:65535]; (65536 words = 256KB)
+   Access: mem[addr[17:2]] for word-aligned access. Never smaller arrays.
+
+2. ALU OPERAND A: For AUIPC/JAL/BRANCH, operand A = PC, not rs1.
+   Code: alu_in_a = id_ex_is_auipc ? id_ex_pc : id_ex_rs1_data;
+
+3. BRANCH FUNCT3: branch_unit receives instr[14:12] directly as branch_funct3.
+   Never derive from alu_op bits (alu_op[2:0] != funct3 for branches).
+
+4. FORWARDING REGISTERS: hazard_unit inputs are rs1_addr[4:0], rs2_addr[4:0]
+   (register ADDRESSES). Never use rs1_data[4:0] (would be wrong bits).
+
+5. BRANCH FLUSH TIMING: Use branch_taken_ex (combinational from EX stage).
+   Never use ex_mem_branch_taken (registered, 1 cycle late).
+
+6. JAL WRITEBACK: JAL writes PC+4 to rd. Pipeline pc_plus4 through ALL stages.
+   wb_sel=2'b10 selects pc_plus4 in MEM/WB stage.
+
+7. WB_SEL TIMING: wb_sel travels in SAME pipeline register as its data.
+   Never register wb_sel or pc_plus4 in separate always blocks.
+
+8. CSR MHARTID: Always return 32'h0 for mhartid (0xF14). Core crashes otherwise.
+
+9. LSU MEM_OP: LSU receives funct3[2:0] for load/store size (NOT hardcoded).
+   Pipeline ex_mem_funct3 through EX/MEM register. Connect to LSU mem_op.
+
+10. MEMORY INITIALIZATION: $readmemh("mem_init.hex", mem); in top.v
+    File contains 65536 lines of 8-hex-digit words (NOPs by default).
+
+11. PASS DETECTION: Include $display("PC=%08h INSTR=%08h", if_id_pc, if_id_instr);
+    Required for test pass detection (JAL-self-loop at stable PC).
+
+12. REGISTER ADDRESSES: Pipeline rs1_addr/rs2_addr as separate [4:0] wires.
+    Distinct from rs1_data/rs2_data [31:0]. Hazard unit uses addresses.
 """
 
 
-# ── Module generation specifications ──────────────────────────────────────────
+# ── Simulation Validation Functions ───────────────────────────────────────────
 
 MODULE_SPECS: dict[str, str] = {
     "alu": """\
@@ -106,15 +137,21 @@ Ports: input [31:0] inst;
        output [3:0] alu_op;
        output alu_src;        // 0=rs2, 1=imm for ALU operand B
        output mem_read, mem_write;
-       output [1:0] mem_size; // 00=byte 01=half 10=word
+       output [1:0] mem_size; // 00=byte 01=halfword 10=word (funct3[1:0])
        output reg_write;
        output [1:0] wb_sel;   // 00=alu 01=mem 10=pc+4 11=csr
        output branch, jump;   // branch=BRANCH opcode, jump=JAL/JALR
        output is_auipc;       // AUIPC: ALU A must be PC
        output [2:0] branch_funct3; // inst[14:12] for branch comparator
+       output [2:0] funct3;   // inst[14:12] for load/store operations (LSU mem_op)
+       output csr_en;         // SYSTEM opcode detected
+       output [11:0] csr_addr;// inst[31:20] for CSR operations
+       output [2:0] csr_op;   // inst[14:12] for CSR operations
+       output [31:0] csr_wdata; // CSR write data (rs1 or immediate)
 Use a single always@(*) with defaults first, then case(inst[6:0]).
 Handle all immediates (I/S/B/U/J types) with correct sign extension.
-Handle all 11 opcodes: RTYPE, ITYPE, LOAD, STORE, BRANCH, JAL, JALR, LUI, AUIPC, SYSTEM, FENCE.""",
+Handle all 11 opcodes: RTYPE, ITYPE, LOAD, STORE, BRANCH, JAL, JALR, LUI, AUIPC, SYSTEM, FENCE.
+CRITICAL: Output funct3 = inst[14:12] for LSU mem_op (load/store size control).""",
 
     "branch_unit": """\
 Generate a combinational Verilog module `branch_unit` for branch and jump resolution.
@@ -135,18 +172,22 @@ Use $signed() for BLT/BGE comparisons.""",
     "lsu": """\
 Generate a Verilog load/store unit module `lsu` for RV32I memory access.
 Ports: input mem_read, mem_write;
-       input [1:0] mem_size;  // 00=byte 01=halfword 10=word
-       input mem_signed;      // 1=sign-extend loads (LB/LH), 0=zero-extend (LBU/LHU)
+       input [2:0] mem_op;    // funct3 from instruction: 000=LB/SB 001=LH/SH 010=LW/SW 100=LBU 101=LHU
        input [31:0] addr, wdata;
        input [31:0] mem_rdata;  // raw word from memory array
        output reg [31:0] rdata; // sign/zero extended load result
        output [31:0] mem_addr;  // word-aligned address to memory
        output [31:0] mem_wdata; // formatted write data
        output [3:0]  mem_be;    // byte enables for write
+CRITICAL: mem_op determines operation size - NOT hardcoded!
 mem_addr = {addr[31:2], 2'b00} (word-aligned).
 Byte lane: addr[1:0] selects byte within word.
-Load: extract correct bytes from mem_rdata using addr[1:0], apply sign/zero extension.
-Store: replicate wdata byte/half into correct lane, set mem_be accordingly.""",
+Load: extract correct bytes from mem_rdata using addr[1:0] and mem_op, apply sign/zero extension.
+Store: replicate wdata byte/half into correct lane, set mem_be accordingly.
+mem_op[1:0]: 00=byte 01=halfword 10=word
+mem_op[2]: 0=sign-extend loads 1=zero-extend loads (LBU/LHU only)
+Store: replicate wdata byte/half into correct lane, set mem_be accordingly.
+""",
 
     "csr_unit": """\
 Generate a minimal CSR unit module `csr_unit` for RV32I simulation.
@@ -194,7 +235,8 @@ ID/EX register: all fields from PIPELINE REGISTER CONTRACT ID/EX section.
   Controls: stall_id_ex (hold), flush_id_ex (zero all control signals).
   On flush: clear mem_read, mem_write, reg_write, branch, jump, is_auipc; keep data fields.
 
-EX/MEM register: all fields from PIPELINE REGISTER CONTRACT EX/MEM section.
+EX/MEM register: all fields from PIPELINE REGISTER CONTRACT EX/MEM section PLUS ex_funct3[2:0].
+  CRITICAL: Include ex_mem_funct3 for LSU mem_op control.
   Controls: flush_ex_mem.
 
 MEM/WB register: alu_result, load_data, rd_addr, reg_write, wb_sel[1:0], pc_plus4.
@@ -211,7 +253,7 @@ Ports: input clk, rst. (No other external ports needed for simulation.)
 
 Instantiate: alu, regfile, decoder, branch_unit, lsu, csr_unit, hazard_unit, pipeline_regs.
 
-Memory: reg [31:0] mem [0:65535]; (word-addressed, unified instruction+data)
+Memory: reg [31:0] mem [0:65535]; (word-addressed, unified instruction+data, 256KB)
 Initialize: initial $readmemh("mem_init.hex", mem);
 
 PC register (exact priority order):
@@ -223,14 +265,18 @@ PC register (exact priority order):
     else                                 pc <= pc + 4;
   end
 
-Fetch: instr_fetch = mem[pc >> 2]; (register into IF/ID on next cycle)
+Fetch: instr_fetch = mem[pc[17:2]]; (word-aligned access to 256KB memory)
 Data memory: synchronous write, combinational read (use lsu outputs for byte enables).
 
-ALU operand A mux: alu_a = (ex_is_auipc | ex_branch | ex_jump) ? ex_pc : forwarded_rs1;
+CRITICAL ALU operand A mux: alu_a = id_ex_is_auipc ? id_ex_pc : id_ex_rs1_data;
+CRITICAL LSU mem_op: .mem_op(ex_mem_funct3)  // NOT hardcoded 3'b010!
+
 Writeback mux: uses mem_wb_wb_sel: 00=alu_result 01=load_data 10=pc_plus4 11=csr_rdata.
 
 Forwarding mux: apply forward_a/forward_b selectors to choose between
   regfile output, EX/MEM alu_result, MEM/WB writeback value.
+
+CRITICAL: Pipeline ex_mem_funct3 through EX/MEM register for LSU mem_op control.
 
 Simulation display (required for test pass detection):
   always @(posedge clk) if (!rst) $display("PC=%08h INSTR=%08h", if_id_pc, if_id_instr);
@@ -256,6 +302,7 @@ def _log_attempt(
     module_name: str,
     attempt: int,
     lint_errors: list[str],
+    semantic_errors: list[str],
     token_count: int,
     success: bool,
 ) -> None:
@@ -266,12 +313,121 @@ def _log_attempt(
         "attempt": attempt,
         "success": success,
         "lint_error_count": len(lint_errors),
+        "semantic_error_count": len(semantic_errors),
         "lint_errors": lint_errors[:20],
+        "semantic_errors": semantic_errors[:20],
         "token_count": token_count,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     with open(LOG_FILE, "a") as f:
         f.write(json.dumps(entry) + "\n")
+
+
+def _normalize_verilog_text(verilog: str) -> str:
+    """Ensure every generated Verilog file ends with a single newline."""
+    return verilog.rstrip("\r\n") + "\n"
+
+
+def _call_groq_api(system: str, messages: list[dict], model: str) -> tuple[str, int]:
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY not set")
+
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+        ] + messages,
+        "temperature": TEMPERATURE,
+        "max_tokens": MAX_TOKENS,
+    }
+    data = json.dumps(payload).encode("utf-8")
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "python-groq-client/1.0",
+    }
+    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+
+    try:
+        with urllib.request.urlopen(request, timeout=120) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            payload = exc.read().decode("utf-8")
+        except Exception:
+            payload = ""
+        raise RuntimeError(
+            f"Groq API request failed: {exc.code} {exc.reason}. Response body: {payload}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Groq API request failed: {exc.reason}") from exc
+
+    choices = body.get("choices")
+    if isinstance(choices, list) and choices:
+        first = choices[0]
+        message = first.get("message", {})
+        if isinstance(message, dict) and isinstance(message.get("content"), str):
+            token_count = body.get("usage", {}).get("total_tokens", 0)
+            return message["content"], token_count
+
+    raise RuntimeError(f"Unexpected Groq API response format: {body}")
+
+
+def _call_openrouter_api(system: str, messages: list[dict], model: str) -> tuple[str, int]:
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENROUTER_API_KEY not set")
+
+    url = "https://openrouter.ai/v1/chat/completions"
+    payload = {
+        "model": os.environ.get("OPENROUTER_MODEL", "gpt-4o-mini"),
+        "messages": [
+            {"role": "system", "content": system},
+        ] + messages,
+        "temperature": TEMPERATURE,
+        "max_tokens": MAX_TOKENS,
+    }
+    data = json.dumps(payload).encode("utf-8")
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "python-openrouter-client/1.0",
+    }
+    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+
+    try:
+        with urllib.request.urlopen(request, timeout=120) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            payload = exc.read().decode("utf-8")
+        except Exception:
+            payload = ""
+        raise RuntimeError(
+            f"OpenRouter API request failed: {exc.code} {exc.reason}. Response body: {payload}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"OpenRouter API request failed: {exc.reason}") from exc
+
+    choices = body.get("choices")
+    if isinstance(choices, list) and choices:
+        first = choices[0]
+        message = first.get("message", {})
+        if isinstance(message, dict) and isinstance(message.get("content"), str):
+            token_count = body.get("usage", {}).get("total_tokens", 0)
+            return message["content"], token_count
+
+    raise RuntimeError(f"Unexpected OpenRouter API response format: {body}")
+
+
+def _call_llm(system: str, messages: list[dict], model: str) -> tuple[str, int]:
+    if os.environ.get("OPENROUTER_API_KEY"):
+        return _call_openrouter_api(system, messages, model)
+    raise RuntimeError("OPENROUTER_API_KEY not set. OpenRouter is required for generation.")
 
 
 # ── Verilog extraction ─────────────────────────────────────────────────────────
@@ -335,10 +491,9 @@ def generate_module(
     knowledge_context: list[dict],
 ) -> tuple[str, int]:
     """
-    Call claude-sonnet-4-6 to generate a Verilog module.
+    Call Groq to generate a Verilog module.
     Returns (verilog_string, total_token_count).
     """
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
     rtl_ctx_text = _format_rtl_context(rtl_context)
     know_ctx_text = _format_knowledge_context(knowledge_context)
@@ -363,16 +518,11 @@ Requirements:
 - Follow ALL rules in the hardware contract exactly.
 """
 
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=MAX_TOKENS,
-        temperature=TEMPERATURE,
+    response_text, token_count = _call_llm(
         system=GLOBAL_CONTRACT,
         messages=[{"role": "user", "content": user_prompt}],
+        model=MODEL,
     )
-
-    response_text = response.content[0].text
-    token_count = response.usage.input_tokens + response.usage.output_tokens
 
     verilog = _extract_verilog(response_text)
     return verilog, token_count
@@ -423,73 +573,23 @@ def lint_check(filepath: Path, all_files: list[Path]) -> list[str]:
         return ["%Error: verilator lint timed out"]
 
 
-def fix_with_feedback(
-    module_name: str,
-    verilog: str,
-    errors: list[str],
-    spec: str,
-) -> tuple[str, int]:
-    """
-    Feed broken Verilog + Verilator error output back to LLM for correction.
-    Returns (fixed_verilog, token_count).
-    """
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-
-    error_text = "\n".join(errors)
-    fix_prompt = f"""\
-The Verilog module `{module_name}` failed Verilator lint with these errors:
-
-VERILATOR ERRORS:
-{error_text}
-
-ORIGINAL SPECIFICATION:
-{spec}
-
-BROKEN CODE:
-```verilog
-{verilog}
-```
-
-Fix ALL lint errors while:
-1. Preserving the exact module interface (port names and widths).
-2. Following all rules in the hardware contract.
-3. Not changing correct logic — only fix what Verilator complained about.
-
-Return ONLY the corrected complete Verilog module in a ```verilog code block.
-"""
-
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=MAX_TOKENS,
-        temperature=TEMPERATURE,
-        system=GLOBAL_CONTRACT,
-        messages=[{"role": "user", "content": fix_prompt}],
-    )
-
-    response_text = response.content[0].text
-    token_count = response.usage.input_tokens + response.usage.output_tokens
-    verilog = _extract_verilog(response_text)
-    return verilog, token_count
-
-
 # ── Main generation loop ───────────────────────────────────────────────────────
 
 def generate_with_lint_fix(
     module_name: str,
     component: str,
     all_files: list[Path],
-    max_iterations: int = 5,
+    max_iterations: int = 3,
     spec: Optional[str] = None,
 ) -> tuple[str, Path]:
     """
-    Full generation loop with lint-fix feedback:
+    Full generation loop with Groq lint-fix feedback:
     1. Retrieve RTL context and knowledge context.
-    2. Generate module via LLM.
+    2. Generate module via LLM once.
     3. Save to rtl/generated/{module_name}.v
-    4. Lint check.
-    5. If errors: fix_with_feedback → overwrite file → repeat lint.
-    6. Return (final_verilog, filepath) on success.
-    7. Raise LintFailureError if still failing after max_iterations.
+    4. Run lint check and retry up to max_iterations with feedback.
+    5. Return (verilog, filepath) on success.
+    6. Raise LintFailureError if lint fails after all attempts.
 
     Logs every attempt to results/generation_log.jsonl.
     """
@@ -501,40 +601,84 @@ def generate_with_lint_fix(
 
     logger.info("Generating module: %s (component=%s)", module_name, component)
 
-    # Retrieve context
-    rtl_context = retrieve(component, spec)
+    # Retrieve combined RTL context from the full corpus rather than narrow component-only references.
+    # This lets the generator see all relevant module logic together before producing each .v file.
+    rtl_context = retrieve("all", spec)
     knowledge_context = query_knowledge(spec)
     logger.debug("Retrieved %d RTL docs, %d knowledge docs", len(rtl_context), len(knowledge_context))
 
     # Initial generation
     verilog, tokens = generate_module(module_name, spec, rtl_context, knowledge_context)
-    filepath.write_text(verilog)
+    filepath.write_text(_normalize_verilog_text(verilog), encoding="utf-8")
     logger.info("Generated %s (%d tokens)", module_name, tokens)
 
-    last_errors: list[str] = []
+    # Lint + semantic validation loop
+    current_verilog = verilog
     for attempt in range(1, max_iterations + 1):
-        errors = lint_check(filepath, all_files)
-        success = len(errors) == 0
+        lint_errors = lint_check(filepath, all_files)
+        semantic_errors = validate(current_verilog, module_name)
+        all_errors = lint_errors + semantic_errors
 
         _log_attempt(
             module_name=module_name,
             attempt=attempt,
-            lint_errors=errors,
+            lint_errors=lint_errors,
+            semantic_errors=semantic_errors,
             token_count=tokens,
-            success=success,
+            success=len(all_errors) == 0
         )
 
-        if success:
-            logger.info("[OK] %s lint PASS (attempt %d)", module_name, attempt)
-            return verilog, filepath
+        if not all_errors:
+            logger.info("[OK] %s validation PASS (attempt %d)", module_name, attempt)
+            return current_verilog, filepath
 
-        last_errors = errors
-        logger.info("  %s attempt %d: %d lint issues — fixing...", module_name, attempt, len(errors))
-        for e in errors[:5]:
-            logger.debug("    %s", e)
+        logger.warning(
+            "%s failed validation (attempt %d/%d) with %d lint + %d semantic issue(s). Retrying...",
+            module_name, attempt, max_iterations, len(lint_errors), len(semantic_errors)
+        )
 
         if attempt < max_iterations:
-            verilog, tokens = fix_with_feedback(module_name, verilog, errors, spec)
-            filepath.write_text(verilog)
+            # Feed errors back to LLM for fix
+            logger.info("Calling Groq to fix %s (attempt %d)...", module_name, attempt + 1)
+            current_verilog = fix_with_feedback(module_name, current_verilog, all_errors)
+            filepath.write_text(current_verilog)
+            time.sleep(45)  # Groq rate limit
+        
+    # Final validation check after last fix attempt
+    lint_errors = lint_check(filepath, all_files)
+    semantic_errors = validate(current_verilog, module_name)
+    all_errors = lint_errors + semantic_errors
+    if all_errors:
+        logger.error("[FAIL] %s FAILED validation after %d attempts", module_name, max_iterations)
+        for e in all_errors[:5]:
+            logger.error("    %s", e)
+        raise LintFailureError(module_name, all_errors, max_iterations)
 
-    raise LintFailureError(module_name, last_errors, max_iterations)
+    logger.info("[OK] %s validation PASS (attempt %d)", module_name, max_iterations)
+    return current_verilog, filepath
+
+
+def fix_with_feedback(module_name: str, verilog: str, errors: list[str]) -> str:
+    error_str = "\n".join(errors[:15])
+    system = (
+        "You are fixing Verilog-2001 lint errors. "
+        "Output ONLY the complete corrected Verilog module. "
+        "No markdown fences, no explanation. "
+        "Start with 'module' and end with 'endmodule'.\n\n"
+        "COMMON FIXES:\n"
+        "- WIDTHEXPAND on comparison: use 'result = (a<b) ? 32'd1 : 32'd0' not just '(a<b)'\n"
+        "- PROCASSWIRE: change 'output wire' to 'output reg' for signals assigned in always blocks\n"
+        "- CASEINCOMPLETE: add 'default: ;' to every case statement\n"
+        "- Incomplete literals: write '4'b0000' not '4'b', '32'h0' not '32'h'\n"
+        "- PINMISSING: use exact port names from submodule declarations\n"
+    )
+    prompt = (
+        f"Fix all Verilator lint errors in this Verilog module '{module_name}'.\n\n"
+        f"LINT ERRORS:\n{error_str}\n\n"
+        f"CURRENT CODE:\n{verilog}\n\n"
+        f"Output the complete corrected module only."
+    )
+    fixed, _ = _call_llm(system, [{"role": "user", "content": prompt}], MODEL)
+    # extract verilog
+    m = re.search(r'\bmodule\b.*?\bendmodule\b', fixed, re.DOTALL)
+    return m.group(0).strip() if m else fixed.strip()

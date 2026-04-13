@@ -299,7 +299,118 @@ DEBUG_LESSONS: list[KnowledgeEntry] = [
         ),
     ),
 ]
-
+SIMULATION_LESSONS: list[KnowledgeEntry] = [
+    KnowledgeEntry(
+        id="sim_001",
+        category="debug_lesson",
+        title="ELF to hex conversion must use byte-reversed verilog output",
+        text=(
+            "LESSON LEARNED: riscv64-unknown-elf-objcopy must output verilog format with byte reversal. "
+            "Parse @address markers and remap addresses to 0x00000000. "
+            "The final mem_init.hex must contain 65536 32-bit words in little-endian word order."
+        ),
+    ),
+    KnowledgeEntry(
+        id="sim_002",
+        category="debug_lesson",
+        title="program.hex must be colocated with the sim binary or use absolute path",
+        text=(
+            "LESSON LEARNED: Verilator simulation runs from sim/obj_dir/, so relative $readmemh paths must resolve there. "
+            "The test harness must write mem_init.hex where the sim binary can open it before running."
+        ),
+    ),
+    KnowledgeEntry(
+        id="sim_003",
+        category="debug_lesson",
+        title="Memory must be 65536 words, not 4096",
+        text=(
+            "LESSON LEARNED: riscv-tests require 256KB of unified memory. "
+            "Use reg [31:0] mem [0:65535] and address with pc[17:2]. "
+            "Smaller memories lead to illegal 0x00000000 fetches and wrong branch behavior."
+        ),
+    ),
+    KnowledgeEntry(
+        id="sim_004",
+        category="debug_lesson",
+        title="CSR mhartid must return 0 at startup",
+        text=(
+            "LESSON LEARNED: riscv-tests startup reads mhartid and expects zero. "
+            "Implement a CSR stub that returns 32'h0 for CSR address 12'hF14."
+        ),
+    ),
+    KnowledgeEntry(
+        id="sim_005",
+        category="debug_lesson",
+        title="Branch flush must use branch_taken_ex, not registered signal",
+        text=(
+            "LESSON LEARNED: flush_if_id and flush_id_ex must be driven by branch_taken_ex directly. "
+            "Using the registered ex_mem_branch_taken delays flush by one cycle and corrupts the next instruction."
+        ),
+    ),
+    KnowledgeEntry(
+        id="sim_006",
+        category="debug_lesson",
+        title="Branch unit must use funct3, not alu_op bits",
+        text=(
+            "LESSON LEARNED: branch condition is encoded in inst[14:12]. "
+            "Do not derive branch type from alu_op bits, because ALU encoding differs."
+        ),
+    ),
+    KnowledgeEntry(
+        id="sim_007",
+        category="debug_lesson",
+        title="Forwarding unit must compare register addresses, not data bits",
+        text=(
+            "LESSON LEARNED: hazard detection must use 5-bit rs1/rs2 register addresses. "
+            "Never compare lower bits of rs1_data or rs2_data."
+        ),
+    ),
+    KnowledgeEntry(
+        id="sim_008",
+        category="debug_lesson",
+        title="AUIPC must use PC as ALU operand A",
+        text=(
+            "LESSON LEARNED: AUIPC computes PC + immediate, so ALU operand A must be the current PC. "
+            "Use id_ex_pc when is_auipc is asserted."
+        ),
+    ),
+    KnowledgeEntry(
+        id="sim_009",
+        category="debug_lesson",
+        title="JAL writeback must use pipelined PC+4",
+        text=(
+            "LESSON LEARNED: JAL writes return address PC+4, not ALU result. "
+            "Pipeline pc_plus4 through all stages and select it with wb_sel=2'b10 in MEM/WB."
+        ),
+    ),
+    KnowledgeEntry(
+        id="sim_010",
+        category="debug_lesson",
+        title="wb_sel must travel with its data in the same pipeline register",
+        text=(
+            "LESSON LEARNED: wb_sel and pc_plus4 must update in the same always block as the rest of MEM/WB data. "
+            "Separating wb_sel into a different register causes writeback to use stale select signals."
+        ),
+    ),
+    KnowledgeEntry(
+        id="sim_011",
+        category="debug_lesson",
+        title="Pass detection requires $display PC/INSTR output",
+        text=(
+            "LESSON LEARNED: test harness detects pass by parsing PC and instruction values from $display output. "
+            "Include $display(\"PC=%08h INSTR=%08h\", if_id_pc, if_id_instr) in top.v."
+        ),
+    ),
+    KnowledgeEntry(
+        id="sim_012",
+        category="debug_lesson",
+        title="LSU mem_op must be routed from pipelined funct3, not hardcoded value",
+        text=(
+            "LESSON LEARNED: load/store size control comes from instruction funct3. "
+            "Pipeline ex_mem_funct3 through EX/MEM and connect it to the LSU mem_op port."
+        ),
+    ),
+]
 
 # ── Angelo Patterns (6) ────────────────────────────────────────────────────────
 
@@ -383,8 +494,8 @@ ANGELO_PATTERNS: list[KnowledgeEntry] = [
 # ── Accessor ───────────────────────────────────────────────────────────────────
 
 def get_all_entries() -> list[KnowledgeEntry]:
-    """Return flat list of all 28 knowledge entries."""
-    return BUG_PATTERNS + DEBUG_LESSONS + ANGELO_PATTERNS
+    """Return flat list of all knowledge entries."""
+    return BUG_PATTERNS + DEBUG_LESSONS + SIMULATION_LESSONS + ANGELO_PATTERNS
 
 
 # ── Build knowledge base ───────────────────────────────────────────────────────
