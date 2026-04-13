@@ -91,42 +91,102 @@ def find_riscv_tests_dir() -> Optional[Path]:
     return None
 
 
-def try_clone_riscv_tests() -> Optional[Path]:
+def _find_riscv_toolchain() -> Optional[str]:
+    """Return the RISC-V bare-metal GCC prefix if a toolchain is found."""
+    for prefix in ["riscv32-unknown-elf-", "riscv64-unknown-elf-"]:
+        if shutil.which(f"{prefix}gcc"):
+            return prefix
+    return None
+
+
+def try_build_riscv_tests() -> Optional[Path]:
     """
-    Clone riscv-tests from GitHub (precompiled ELFs are in isa/).
-    Returns isa/ directory on success, None on failure.
+    Build rv32ui-p-* ELF tests from source using an available RISC-V toolchain.
+    Expects the riscv-tests source tree at data/riscv-tests/isa/.
+    Returns isa/ directory containing compiled ELFs on success, None on failure.
     """
     dest = REPO_ROOT / "data" / "riscv-tests"
     isa_dir = dest / "isa"
 
+    if not isa_dir.exists():
+        return None
+
+    # Already built?
+    if (isa_dir / "rv32ui-p-add").exists():
+        return isa_dir
+
+    prefix = _find_riscv_toolchain()
+    if prefix is None:
+        print(
+            "WARNING: No RISC-V bare-metal toolchain found.\n"
+            "  riscv-tests must be compiled before running.\n"
+            "  Install 'riscv64-unknown-elf-gcc' (bare-metal GCC) and re-run."
+        )
+        return None
+
+    xlen = "32" if prefix.startswith("riscv32") else "64"
+    print(f"Found toolchain: {prefix}gcc  — building rv32ui-p-* tests (XLEN={xlen})...")
+    try:
+        result = subprocess.run(
+            ["make", f"XLEN={xlen}", f"RISCV_PREFIX={prefix}", "rv32ui"],
+            cwd=str(isa_dir),
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode != 0:
+            print(f"WARNING: make failed:\n{result.stderr[:500]}")
+            return None
+        if (isa_dir / "rv32ui-p-add").exists():
+            print("riscv-tests built successfully.")
+            return isa_dir
+        print("WARNING: make succeeded but rv32ui-p-add not found in isa/")
+        return None
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+        print(f"ERROR: failed to build riscv-tests: {e}")
+        return None
+
+
+def try_clone_riscv_tests() -> Optional[Path]:
+    """
+    Clone riscv-tests source from GitHub, then build ELFs if a toolchain is present.
+    The riscv-tests repo contains only assembly sources; ELFs must be compiled.
+    Returns isa/ directory containing compiled ELFs on success, None on failure.
+    """
+    dest = REPO_ROOT / "data" / "riscv-tests"
+    isa_dir = dest / "isa"
+
+    # Already built from a previous run?
     if isa_dir.exists() and (isa_dir / "rv32ui-p-add").exists():
         return isa_dir
 
-    if dest.exists():
-        print(f"Directory {dest} exists but is incomplete. cleaning up...")
-        import shutil
+    # Source already present (e.g. committed to repo) — try building
+    if isa_dir.exists() and (isa_dir / "rv32ui" / "add.S").exists():
+        print("riscv-tests source found locally. Attempting build from source...")
+        return try_build_riscv_tests()
+
+    # Need to clone first
+    if dest.exists() and not (dest / "isa").exists():
+        print(f"Directory {dest} exists but isa/ is missing — cleaning up...")
         try:
             shutil.rmtree(dest)
         except Exception as e:
             print(f"WARNING: Could not remove {dest}: {e}")
 
-    print("Cloning riscv-tests (precompiled ELFs in isa/)...")
+    print("Cloning riscv-tests from GitHub (source only, ELFs must be compiled)...")
     try:
         subprocess.run(
-            ["git", "clone", "--depth=1", 
-             "--filter=blob:none", # efficient clone
+            ["git", "clone", "--depth=1",
              "https://github.com/riscv-software-src/riscv-tests.git",
              str(dest)],
             check=True,
             timeout=120,
         )
-        if isa_dir.exists() and (isa_dir / "rv32ui-p-add").exists():
-            return isa_dir
-        print("WARNING: cloned riscv-tests but rv32ui-p-add not found in isa/")
-        return None
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
         print(f"ERROR: failed to clone riscv-tests: {e}")
         return None
+
+    return try_build_riscv_tests()
 
 
 # ── ELF to hex conversion ──────────────────────────────────────────────────────
@@ -352,19 +412,26 @@ def main() -> int:
     print("RV32I ISA Test Runner")
     print("=" * 60)
 
-    # Find riscv-tests
+    # Find riscv-tests (pre-built ELFs → local build → clone+build)
     isa_dir = find_riscv_tests_dir()
     if isa_dir is None:
-        print("riscv-tests not found locally. Attempting clone...")
+        print("Pre-built ELFs not found. Trying local build from source...")
+        isa_dir = try_build_riscv_tests()
+    if isa_dir is None:
+        print("Local build unavailable. Attempting clone + build...")
         isa_dir = try_clone_riscv_tests()
 
     if isa_dir is None:
         print(
-            "\nERROR: Cannot find riscv-tests ELF binaries.\n"
-            "Options:\n"
-            "  1. sudo apt install riscv-tests (if available)\n"
-            "  2. Set RISCV_TESTS_PATH=/path/to/riscv-tests/isa\n"
-            "  3. Ensure network access for auto-clone\n"
+            "\nERROR: Cannot find or build riscv-tests ELF binaries.\n"
+            "The riscv-tests source is in data/riscv-tests/ but requires compilation.\n"
+            "\nOptions:\n"
+            "  1. Install a bare-metal RISC-V toolchain:\n"
+            "       sudo apt install gcc-riscv64-unknown-elf  (Ubuntu 22.04+)\n"
+            "       brew install riscv-tools  (macOS)\n"
+            "     Then re-run this script — it will build automatically.\n"
+            "  2. Set RISCV_TESTS_PATH=/path/to/precompiled/riscv-tests/isa\n"
+            "     (a directory containing rv32ui-p-add, rv32ui-p-addi, etc.)\n"
         )
         return 1
 
