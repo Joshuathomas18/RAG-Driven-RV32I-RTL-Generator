@@ -24,6 +24,7 @@ CHROMA_PATH = REPO_ROOT / "data" / "chromadb"
 os.environ.setdefault("HF_HOME", str(REPO_ROOT / "data" / "model_cache"))
 
 MINILM_MODEL   = "sentence-transformers/all-MiniLM-L6-v2"
+CROSS_MODEL    = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 CODEBERT_MODEL = "microsoft/codebert-base"
 
 # ── Component → known good reference modules ───────────────────────────────────
@@ -42,6 +43,7 @@ _chroma_client: Optional[chromadb.PersistentClient] = None
 _rtl_collection: Optional[chromadb.Collection] = None
 _knowledge_collection: Optional[chromadb.Collection] = None
 _minilm_model: Optional[SentenceTransformer] = None
+_cross_model: Optional[object] = None
 _codebert_model = None
 _codebert_tokenizer = None
 
@@ -82,6 +84,16 @@ def _get_minilm() -> SentenceTransformer:
         logger.info("Loading MiniLM model (%s) ...", MINILM_MODEL)
         _minilm_model = SentenceTransformer(MINILM_MODEL)
     return _minilm_model
+
+
+def _get_cross_encoder():
+    """Lazy-load the CrossEncoder singleton."""
+    global _cross_model
+    if _cross_model is None:
+        from sentence_transformers import CrossEncoder
+        logger.info("Loading Cross-Encoder model (%s) ...", CROSS_MODEL)
+        _cross_model = CrossEncoder(CROSS_MODEL)
+    return _cross_model
 
 
 def _get_codebert():
@@ -159,6 +171,27 @@ def _reciprocal_rank_fusion(
     for rank, doc_id in enumerate(bm25_ids, start=1):
         scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank)
     return sorted(scores, key=lambda x: scores[x], reverse=True)
+
+
+def _cross_encode_rerank(query: str, candidates: list[dict], top_n: int = 5) -> list[dict]:
+    """
+    Rerank candidates using a Cross-Encoder.
+    Takes the query and a list of candidates, scores each pair, and returns top_n.
+    """
+    if not candidates:
+        return []
+
+    model = _get_cross_encoder()
+    # Prepare pairs for the cross-encoder: (query, document)
+    pairs = [[query, c["document"]] for c in candidates]
+    scores = model.predict(pairs)
+
+    # Attach scores and sort
+    for i, score in enumerate(scores):
+        candidates[i]["cross_score"] = float(score)
+
+    ranked = sorted(candidates, key=lambda x: x["cross_score"], reverse=True)
+    return ranked[:top_n]
 
 
 def retrieve(component: str, query: str, k: int = 3) -> list[dict]:
@@ -242,6 +275,11 @@ def retrieve(component: str, query: str, k: int = 3) -> list[dict]:
                     })
                     seen_ids.add(doc_id)
                     remaining -= 1
+
+            # Step 3: Final Cross-Encoder Rerank of the collected candidates
+            # We take all 'results' and rerank them based on the query
+            if results:
+                results = _cross_encode_rerank(query, results, top_n=k)
 
         except Exception as e:
             logger.warning("Hybrid fill failed: %s", e)

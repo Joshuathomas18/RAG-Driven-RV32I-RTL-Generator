@@ -1,12 +1,15 @@
-# Environment
-.env
-
 # Data and Models
 data/model_cache/
+data/chromadb/
+data/riscv-tests/
+data/chunk_summaries.json
 
 # Python artifacts
 **/__pycache__/
 *.pyc
+.ipynb_checkpoints/
 
 # Distribution specific logs
-results/generation_log.jsonl
+results/
+!results/summary.md
+!results/isa_results.md
