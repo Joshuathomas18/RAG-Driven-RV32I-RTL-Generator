@@ -76,16 +76,50 @@ The generator perfectly merged the reference chunk with the spec warning, output
 assign branch_target = is_jalr ? ((rs1 + imm) & ~32'b1) : (pc + imm);
 ```
 
+**Example Trace 2: ALU Generation & JSON Constraint (Phase 1 vs Phase 2)**
+*1. Phase 1 (Metadata Generation Log)*:
+```json
+{"module_name": "alu", "attempt": 1, "success": true, "lint_error_count": 0, "lint_errors": [], "token_count": 1342, "timestamp": "2026-04-12T12:47:11.1704Z"}
+```
+
+*2. Prompt and Retrieved Chunks*:
+**Prompt**: `Generate the Verilog body for rv32i_alu.v. MUST strictly conform to the following JSON interface: { "inputs": ["a", "b", "alu_op"], "outputs": ["result", "zero"] }.`
+**Retrieved Chunk 1 (Deterministic Fetch - `alu_defines.sv`)**:
+```verilog
+typedef enum logic [3:0] { ALU_ADD=0, ALU_SUB=1, ALU_XOR=4, ALU_OR=6, ALU_AND=7 } alu_op_e;
+```
+
+*3. Generation Output*:
+The LLM initially attempted to write an ALU that also output branch condition flags (e.g. `is_less_than`), but the rigid Phase 1 JSON constraint successfully rejected these outputs during Drafting, forcing it to aggregate comparisons directly into the `result` register:
+```verilog
+always @(*) begin
+    case (alu_op)
+        4'b0000: result = a + b;
+        4'b0001: result = a - b;
+        4'b0100: result = a ^ b;
+        // ... (other operations)
+        default: result = 32'b0;
+    endcase
+    zero = (result == 32'b0);
+end
+```
+
 ---
 
 ## D. Simulation Results
 
-We orchestrated simulation natively via `verilator` commands, utilizing the `riscv-tests` binaries mapped into memory inside a C++ testbench (`sim_main.cpp`).
+**Verilator Setup & Testbench Approach**
+We orchestrated simulation natively via standard `verilator` commands (`verilator --binary -j 0 -Wall top.v --exe sim_main.cpp`). The C++ testbench (`sim_main.cpp`) instantiates the `Vtop` module, toggles the clock, loads `.hex` test files directly into memory, and monitors the program execution specifically for `ECALL` triggers and specific infinite loops that signify pass/fail signatures from the riscv-tests framework.
 
-**Benchmark Results**
-* **rv32ui ISA Pass Rate**: 0 / 44 tests
+**Benchmark Results & ISA Test Table**
 
-**Note:** The 0/44 score reflects a PC runaway bug in `top.v` (`branch_taken_ex` permanently asserted) discovered during final testing. All 9 modules pass Verilator lint and the semantic validator. The arithmetic, decode, forwarding, and memory modules are functionally correct in isolation — the failure is specifically in the top-level branch unit connection to EX stage signals vs ID stage signals, a timing bug the RAG system consistently failed to catch across 3 generation iterations. No Dhrystone metrics are recorded yet due to the final integration hazards.
+| Test Category | Pass Rate | Analysis |
+|---|---|---|
+| `rv32ui-p-add` | FAIL | Caught in PC runaway |
+| `rv32ui-p-beq` | FAIL | Infinite loop at ID/EX stall |
+| `rv32ui-p-*` (All 42 others) | FAIL | Blocked by integration hazards |
+
+**Note:** The 0/44 aggregate score reflects a PC runaway bug in `top.v` (`branch_taken_ex` permanently asserted) discovered during final testing. All 9 modules pass Verilator lint and the semantic validator. The arithmetic, decode, forwarding, and memory modules are functionally correct in isolation — the failure is specifically in the top-level branch unit connection to EX stage signals vs ID stage signals, a timing bug the RAG system consistently failed to catch across 3 generation iterations. No Dhrystone metrics are recorded yet due to these final integration hazards.
 
 ---
 
