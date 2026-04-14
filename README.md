@@ -61,7 +61,7 @@ git clone <this-repo>
 cd RAG-Driven-RV32I-RTL-Generator
 pip install -r requirements.txt
 cp .env.example .env
-# Edit .env — set ANTHROPIC_API_KEY
+# Edit .env — set OPENROUTER_API_KEY
 python scripts/run_pipeline.py
 ```
 
@@ -71,8 +71,8 @@ python scripts/run_pipeline.py
 |--------|---------|
 | `rag/corpus.py` | Clone PicoRV32/Ibex/Angelo repos, extract Verilog modules, embed with CodeBERT, store in ChromaDB |
 | `rag/knowledge.py` | Embed 28 bug patterns + debug lessons + Angelo patterns with MiniLM |
-| `rag/pipeline.py` | Hybrid retrieval: deterministic by module name + BM25+semantic fallback |
-| `rag/generator.py` | LLM generation with Verilator lint-fix loop (max 5 iterations) |
+| `rag/pipeline.py` | Hybrid retrieval: deterministic by module name + BM25+semantic fallback + Cross-Encoder re-ranking |
+| `rag/generator.py` | Two-Phase LLM generation via OpenRouter: Phase 1 (JSON Interface) -> Phase 2 (Verilog Body) + Verilator lint-fix loop |
 | `scripts/run_pipeline.py` | Main entry: build corpus → generate 9 modules → compile → test |
 | `sim/sim_main.cpp` | Verilator C++ testbench (reset 10 cycles, run 500k cycles) |
 | `sim/run_tests.py` | Run all 42 rv32ui-p-* riscv-tests, detect PASS via JAL-self-loop |
@@ -111,4 +111,4 @@ After a full run:
 
 **HuggingFace model download slow:** Models cache to `data/model_cache/` (set via `HF_HOME`). First run downloads ~500MB (CodeBERT) + ~90MB (MiniLM).
 
-**ANTHROPIC_API_KEY not set:** Copy `.env.example` to `.env` and set your key.
+**OPENROUTER_API_KEY not set:** Copy `.env.example` to `.env` and set your OpenRouter key.
