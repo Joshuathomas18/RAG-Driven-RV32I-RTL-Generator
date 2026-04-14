@@ -130,7 +130,9 @@ We orchestrated simulation natively via standard `verilator` commands (`verilato
 
 ## E. Failure Analysis
 
-Our failure analysis underscores the exact limitations of auto-generated RTL. Our generated processor failed through three distinct evolutionary modes as we solved one problem and uncovered the next:
+Our failure analysis underscores the exact limitations of auto-generated RTL. It is important to highlight that before we introduced the **Golden Dataset** and our **Two-Phase JSON Interface Strategy**, the model generated entirely fragmented syntax that couldn't even pass static compiler linting. 
+
+Once those semantic frameworks were established, our instruction accuracy immediately spiked, allowing the pipeline to compile seamlessly. The failure profile completely shifted from "syntax errors" to deep, microarchitectural data-path edge cases. Our generated processor then failed through three distinct evolutionary modes as we solved one problem and uncovered the next:
 
 1. **Initial Failure: Early Execution Stall**
    * **Symptom**: The pipeline would execute the first instruction and then freeze.
