@@ -5,13 +5,13 @@ Generated modules: 9
 | Module | File |
 |--------|------|
 | alu | alu.v |
-| regfile | regfile.v |
-| decoder | decoder.v |
 | branch_unit | branch_unit.v |
-| lsu | lsu.v |
 | csr_unit | csr_unit.v |
+| decoder | decoder.v |
 | hazard_unit | hazard_unit.v |
+| lsu | lsu.v |
 | pipeline_regs | pipeline_regs.v |
+| regfile | regfile.v |
 | top | top.v |
 
 Verilator compile: FAILED

@@ -1,0 +1,55 @@
+{
+  "module": "lsu",
+  "ports": [
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "mem_read"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "mem_write"
+    },
+    {
+      "direction": "input",
+      "width": "[2:0]",
+      "name": "mem_op"
+    },
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "addr"
+    },
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "wdata"
+    },
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "mem_rdata"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "rdata"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "mem_addr"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "mem_wdata"
+    },
+    {
+      "direction": "output",
+      "width": "[3:0]",
+      "name": "mem_be"
+    }
+  ]
+}

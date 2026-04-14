@@ -35,6 +35,7 @@ REPOS: dict[str, str] = {
     "picorv32": "https://github.com/YosysHQ/picorv32.git",
     "ibex":     "https://github.com/lowRISC/ibex.git",
     "angelo":   "https://github.com/AngeloJacobo/RISC-V.git",
+    "pietroglyph": "https://github.com/pietroglyph/pipelined-rv32i.git",
 }
 
 WHITELIST: dict[str, list[str]] = {
@@ -55,6 +56,12 @@ WHITELIST: dict[str, list[str]] = {
         "rtl/rv32i_basereg.v",
         "rtl/rv32i_memoryaccess.v",
     ],
+    "pietroglyph": [
+        "hdl/rv32i_pipelined_core.sv",
+        "hdl/alu_behavioural.sv",
+        "hdl/register_file.sv",
+        "hdl/rv32i_defines.sv",
+    ],
 }
 
 HINTS: dict[str, str] = {
@@ -70,6 +77,10 @@ HINTS: dict[str, str] = {
     "rv32i_basereg":           "regfile",
     "rv32i_memoryaccess":      "lsu",
     "rv32i_writeback":         "writeback",
+    "rv32i_pipelined_core":    "full_core",
+    "alu_behavioural":         "alu",
+    "register_file":           "regfile",
+    "rv32i_defines":           "full_core",
 }
 
 CHARS_PER_TOKEN = 4
@@ -77,6 +88,16 @@ MAX_EMBED_CHARS = 512 * CHARS_PER_TOKEN
 MAX_SIG_CHARS   = 150 * CHARS_PER_TOKEN
 
 CODEBERT_MODEL = "microsoft/codebert-base"
+
+
+def extract_defines(path: str | Path) -> str:
+    """Extract typedef enums from defines file."""
+    text = Path(path).read_text(errors="replace")
+    enums = re.findall(r'typedef enum.*?endtype', text, re.DOTALL)
+    return '\n'.join(enums)
+
+_defines_path = RTL_SOURCES / "pietroglyph" / "hdl" / "rv32i_defines.sv"
+DEFINES_CONTEXT = extract_defines(_defines_path) if _defines_path.exists() else ""
 
 
 class CorpusUnavailableError(RuntimeError):

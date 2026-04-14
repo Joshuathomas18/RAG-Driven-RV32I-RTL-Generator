@@ -1,0 +1,90 @@
+{
+  "module": "hazard_unit",
+  "ports": [
+    {
+      "direction": "input",
+      "width": "[4:0]",
+      "name": "id_ex_rs1"
+    },
+    {
+      "direction": "input",
+      "width": "[4:0]",
+      "name": "id_ex_rs2"
+    },
+    {
+      "direction": "input",
+      "width": "[4:0]",
+      "name": "ex_mem_rd"
+    },
+    {
+      "direction": "input",
+      "width": "[4:0]",
+      "name": "mem_wb_rd"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "ex_mem_reg_write"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "mem_wb_reg_write"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "id_ex_mem_read"
+    },
+    {
+      "direction": "input",
+      "width": "[4:0]",
+      "name": "if_id_rs1"
+    },
+    {
+      "direction": "input",
+      "width": "[4:0]",
+      "name": "if_id_rs2"
+    },
+    {
+      "direction": "input",
+      "width": "[4:0]",
+      "name": "id_ex_rd"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "branch_taken_ex"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "pc_write"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "if_id_write"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "id_ex_flush"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "if_id_flush"
+    },
+    {
+      "direction": "output",
+      "width": "[1:0]",
+      "name": "forward_a"
+    },
+    {
+      "direction": "output",
+      "width": "[1:0]",
+      "name": "forward_b"
+    }
+  ]
+}

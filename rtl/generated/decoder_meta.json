@@ -1,0 +1,110 @@
+{
+  "module": "decoder",
+  "ports": [
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "instr"
+    },
+    {
+      "direction": "output",
+      "width": "[4:0]",
+      "name": "rs1"
+    },
+    {
+      "direction": "output",
+      "width": "[4:0]",
+      "name": "rs2"
+    },
+    {
+      "direction": "output",
+      "width": "[4:0]",
+      "name": "rd"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "imm"
+    },
+    {
+      "direction": "output",
+      "width": "[3:0]",
+      "name": "alu_op"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "alu_src"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "mem_read"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "mem_write"
+    },
+    {
+      "direction": "output",
+      "width": "[1:0]",
+      "name": "mem_size"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "reg_write"
+    },
+    {
+      "direction": "output",
+      "width": "[1:0]",
+      "name": "wb_sel"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "branch"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "jump"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "is_auipc"
+    },
+    {
+      "direction": "output",
+      "width": "[2:0]",
+      "name": "branch_funct3"
+    },
+    {
+      "direction": "output",
+      "width": "[2:0]",
+      "name": "funct3"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "csr_en"
+    },
+    {
+      "direction": "output",
+      "width": "[11:0]",
+      "name": "csr_addr"
+    },
+    {
+      "direction": "output",
+      "width": "[2:0]",
+      "name": "csr_op"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "csr_wdata"
+    }
+  ]
+}

@@ -236,7 +236,6 @@ def elf_to_hex(elf_path: Path, hex_out: Path, base_addr: int = BASE_ADDR) -> boo
             [
                 "riscv64-unknown-elf-objcopy",
                 "-O", "verilog",
-                "--verilog-data-width=4",
                 str(elf_path),
                 str(tmp_hex),
             ],
@@ -377,6 +376,9 @@ def run_all_tests(isa_dir: Path) -> dict[str, bool]:
             passed_count += 1
         else:
             print(f"  FAIL  rv32ui-p-{test_name}")
+            print("--- Last 50 lines of output ---")
+            print("\n".join(output.splitlines()[-50:]))
+            print("-------------------------------")
             failed_count += 1
 
     total = len(RV32UI_TESTS)

@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 
 from rag.pipeline import retrieve, query_knowledge
 from rag.validator import validate
+from rag.corpus import DEFINES_CONTEXT
 
 load_dotenv()
 
@@ -31,6 +32,9 @@ LOG_FILE  = REPO_ROOT / "results" / "generation_log.jsonl"
 MODEL        = "llama-3.3-70b-versatile"
 TEMPERATURE  = 0.05
 MAX_TOKENS   = 6000
+
+DOCKER_ID = "ab09dec6aa83"  # Target container for Verilator
+DOCKER_APP_DIR = "/app"
 
 
 # ── Hardware contract (injected into every prompt) ─────────────────────────────
@@ -106,7 +110,8 @@ CRITICAL SIMULATION LESSONS (MUST FOLLOW):
 
 12. REGISTER ADDRESSES: Pipeline rs1_addr/rs2_addr as separate [4:0] wires.
     Distinct from rs1_data/rs2_data [31:0]. Hazard unit uses addresses.
-"""
+""" + f"\n\nDEFINED ENUMS:\n{DEFINES_CONTEXT}\n"
+
 
 
 # ── Simulation Validation Functions ───────────────────────────────────────────
@@ -434,31 +439,48 @@ def _call_llm(system: str, messages: list[dict], model: str) -> tuple[str, int]:
     raise RuntimeError("OPENROUTER_API_KEY not set. OpenRouter is required for generation.")
 
 
-# ── Verilog extraction ─────────────────────────────────────────────────────────
+# ── Extraction Utils ───────────────────────────────────────────────────────────
 
 def _extract_verilog(response_text: str) -> str:
     """
     Extract Verilog code from an LLM response.
     Tries ```verilog ... ``` first, then ``` ... ```, then searches for 'module' keyword.
     """
-    # Try ```verilog ... ```
     m = re.search(r"```verilog\s*(.*?)```", response_text, re.DOTALL | re.IGNORECASE)
     if m:
         return m.group(1).strip()
 
-    # Try ``` ... ```
     m = re.search(r"```\s*(.*?)```", response_text, re.DOTALL)
     if m:
         code = m.group(1).strip()
         if "module" in code:
             return code
 
-    # Fall back: find 'module' keyword and take everything from there
     idx = response_text.find("module ")
     if idx != -1:
         return response_text[idx:].strip()
 
     raise ValueError("No Verilog code block found in LLM response")
+
+
+def _extract_json(response_text: str) -> dict:
+    """Extract a JSON block from an LLM response."""
+    m = re.search(r"```json\s*(.*?)```", response_text, re.DOTALL | re.IGNORECASE)
+    if m:
+        try:
+            return json.loads(m.group(1).strip())
+        except json.JSONDecodeError:
+            pass
+
+    # Try raw JSON finding
+    m = re.search(r"\{.*\}", response_text, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(0).strip())
+        except json.JSONDecodeError:
+            pass
+
+    return {}
 
 
 # ── Core generation ────────────────────────────────────────────────────────────
@@ -532,14 +554,14 @@ Requirements:
     return verilog, token_count
 
 
-def generate_module_with_header(
+def generate_module_v(
     module_name: str,
     spec: str,
     header: str,
     rtl_context: list[dict],
     knowledge_context: list[dict],
 ) -> tuple[str, int]:
-    """Phase 3: Generate full module body using the locked header context."""
+    """Phase 3: Generate full module body (Verilog only)."""
     rtl_ctx_text = _format_rtl_context(rtl_context)
     know_ctx_text = _format_knowledge_context(knowledge_context)
 
@@ -551,16 +573,16 @@ Using this EXACT header signature:
 SPECIFICATION:
 {spec}
 
-REFERENCE RTL:
+REFERENCE RTL (from RAG corpus):
 {rtl_ctx_text}
 
 RELEVANT BUG PATTERNS:
 {know_ctx_text}
 
 Requirements:
-- Use the exact ports provided in the header.
-- Return ONLY the complete Verilog module code in a ```verilog block.
-- Follow ALL rules in the hardware contract.
+1. Return ONLY the complete Verilog code in a ```verilog block.
+2. Use the exact ports provided in the header.
+3. Follow ALL rules in the hardware contract.
 """
     response_text, tokens = _call_llm(
         system=GLOBAL_CONTRACT,
@@ -569,6 +591,25 @@ Requirements:
     )
     verilog = _extract_verilog(response_text)
     return verilog, tokens
+
+
+def _extract_module_name(verilog: str) -> str:
+    m = re.search(r'\bmodule\s+(\w+)', verilog)
+    return m.group(1) if m else "unknown"
+
+def extract_ports(verilog: str) -> dict:
+    pattern = r'(input|output)\s+(?:wire\s+|reg\s+)?(?:\[([^\]]+)\]\s+)?(\w+)'
+    ports = []
+    for m in re.finditer(pattern, verilog):
+        direction, width, name = m.group(1), m.group(2), m.group(3)
+        # skip keywords that match pattern accidentally
+        if name in ('wire','reg','logic','signed','unsigned'): continue
+        ports.append({
+            "direction": direction,
+            "width": f"[{width}]" if width else "1",
+            "name": name
+        })
+    return {"module": _extract_module_name(verilog), "ports": ports}
 
 
 def _generate_header(module_name: str, spec: str) -> tuple[str, int]:
@@ -599,35 +640,43 @@ Requirements:
 
 def lint_check(filepath: Path, all_files: list[Path]) -> list[str]:
     """
-    Run Verilator lint-only on filepath plus all_files for cross-module resolution.
-    For non-top modules, suppress unconnected port warnings.
-    Returns list of error/warning lines. Empty list = clean.
+    Run Verilator lint-only inside the Docker container.
+    1. Sync all involved files into the container.
+    2. Execute verilator via docker exec.
     """
     module_name = filepath.stem
+    
+    # Sync current file + all dependencies to the container
+    files_to_sync = [filepath] + all_files
+    for f in files_to_sync:
+        if f.exists():
+            dest = f"{DOCKER_ID}:{DOCKER_APP_DIR}/rtl/generated/{f.name}"
+            subprocess.run(["docker", "cp", str(f), dest], capture_output=True)
 
-    # Order: all prior accepted files first, then the current file
-    other_files = [str(f) for f in all_files if f != filepath and f.exists()]
-    cmd = [
+    # Build the command string for docker exec
+    verilator_cmd = [
         "verilator",
         "--lint-only",
         "-Wall",
         "--language", "1800-2012",
-        f"--top-module", module_name,
+        "--top-module", module_name,
         "-Wno-fatal",
     ]
-
-    # Suppress unconnected warnings for intermediate modules (not top)
+    
     if module_name != "top":
-        cmd += ["-Wno-PINCONNECTEMPTY", "-Wno-UNDRIVEN", "-Wno-UNUSED"]
+        verilator_cmd += ["-Wno-PINCONNECTEMPTY", "-Wno-UNDRIVEN", "-Wno-UNUSED"]
 
-    cmd += other_files + [str(filepath)]
+    # Files inside the container
+    v_files_in_container = [f"{DOCKER_APP_DIR}/rtl/generated/{f.name}" for f in files_to_sync if f.exists()]
+    
+    full_cmd = ["docker", "exec", "-w", f"{DOCKER_APP_DIR}/sim", DOCKER_ID] + verilator_cmd + v_files_in_container
 
     try:
         result = subprocess.run(
-            cmd,
+            full_cmd,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=120,
         )
         output = result.stdout + result.stderr
         error_lines = [
@@ -635,11 +684,10 @@ def lint_check(filepath: Path, all_files: list[Path]) -> list[str]:
             if "%Error" in line or "%Warning" in line
         ]
         return error_lines
-    except FileNotFoundError:
-        logger.warning("verilator not found in PATH. Skipping lint check.")
-        return []
     except subprocess.TimeoutExpired:
-        return ["%Error: verilator lint timed out"]
+        return ["%Error: docker verilator lint timed out"]
+    except Exception as e:
+        return [f"%Error: Docker lint execution failed: {e}"]
 
 
 # ── Main generation loop ───────────────────────────────────────────────────────
@@ -651,87 +699,110 @@ def generate_with_lint_fix(
     max_iterations: int = 3,
     spec: Optional[str] = None,
 ) -> tuple[str, Path]:
-    """
-    Full generation loop with Groq lint-fix feedback:
-    1. Retrieve RTL context and knowledge context.
-    2. Generate module via LLM once.
-    3. Save to rtl/generated/{module_name}.v
-    4. Run lint check and retry up to max_iterations with feedback.
-    5. Return (verilog, filepath) on success.
-    6. Raise LintFailureError if lint fails after all attempts.
-
-    Logs every attempt to results/generation_log.jsonl.
-    """
+    """Full generation loop: Header -> RAG -> Verilog -> Lint Loop -> JSON."""
     if spec is None:
         spec = MODULE_SPECS.get(module_name, f"Generate Verilog module {module_name} for RV32I pipeline.")
 
     RTL_DIR.mkdir(parents=True, exist_ok=True)
     filepath = RTL_DIR / f"{module_name}.v"
+    meta_path = RTL_DIR / f"{module_name}_meta.json"
 
-    # Phase 1: Header generation
-    logger.info("Phase 1: Generating header for %s...", module_name)
-    header, header_tokens = _generate_header(module_name, spec)
+    # 1. Header generation (to ground the retrieval)
+    logger.info("[%s] Phase 1: Header generation...", module_name)
+    header, _ = _generate_header(module_name, spec)
     
-    # Phase 2: Enhanced retrieval using header info
-    logger.info("Phase 2: Retrieving context with header hint...")
+    # 2. Retrieval
+    logger.info("[%s] Phase 2: RAG retrieval...", module_name)
     retrieval_query = f"Module {module_name} with ports: {header}"
     rtl_context = retrieve(component, retrieval_query)
     knowledge_context = query_knowledge(spec)
     
-    # Phase 3: Full body generation
-    logger.info("Phase 3: Generating full module body...")
-    verilog, body_tokens = generate_module_with_header(
+    # 3. Verilog generation
+    logger.info("[%s] Phase 3: Verilog body generation...", module_name)
+    verilog, _ = generate_module_v(
         module_name, spec, header, rtl_context, knowledge_context
     )
-    tokens = header_tokens + body_tokens
     
     filepath.write_text(_normalize_verilog_text(verilog), encoding="utf-8")
-    logger.info("Generated %s (%d tokens)", module_name, tokens)
 
-    # Lint + semantic validation loop
+    # 4. Lint Loop
     current_verilog = verilog
     for attempt in range(1, max_iterations + 1):
         lint_errors = lint_check(filepath, all_files)
         semantic_errors = validate(current_verilog, module_name)
         all_errors = lint_errors + semantic_errors
 
-        _log_attempt(
-            module_name=module_name,
-            attempt=attempt,
-            lint_errors=lint_errors,
-            semantic_errors=semantic_errors,
-            token_count=tokens,
-            success=len(all_errors) == 0
-        )
-
         if not all_errors:
-            logger.info("[OK] %s validation PASS (attempt %d)", module_name, attempt)
-            return current_verilog, filepath
-
-        logger.warning(
-            "%s failed validation (attempt %d/%d) with %d lint + %d semantic issue(s). Retrying...",
-            module_name, attempt, max_iterations, len(lint_errors), len(semantic_errors)
-        )
+            logger.info("[OK] %s passed linting", module_name)
+            break
 
         if attempt < max_iterations:
-            # Feed errors back to LLM for fix
-            logger.info("Calling Groq to fix %s (attempt %d)...", module_name, attempt + 1)
+            logger.info("[%s] Lint failure (attempt %d), retrying fix...", module_name, attempt)
             current_verilog = fix_with_feedback(module_name, current_verilog, all_errors)
-            filepath.write_text(current_verilog)
-            time.sleep(45)  # Groq rate limit
-        
-    # Final validation check after last fix attempt
-    lint_errors = lint_check(filepath, all_files)
-    semantic_errors = validate(current_verilog, module_name)
-    all_errors = lint_errors + semantic_errors
-    if all_errors:
-        logger.error("[FAIL] %s FAILED validation after %d attempts", module_name, max_iterations)
-        for e in all_errors[:5]:
-            logger.error("    %s", e)
+            filepath.write_text(_normalize_verilog_text(current_verilog))
+            time.sleep(10)
+    else:
+        # Failed all attempts
         raise LintFailureError(module_name, all_errors, max_iterations)
 
-    logger.info("[OK] %s validation PASS (attempt %d)", module_name, max_iterations)
+    # 5. Final JSON Metadata generation (ONLY after lint pass)
+    logger.info("[%s] Phase 5: Generating metadata JSON...", module_name)
+    contract = extract_ports(current_verilog)
+    meta_path.write_text(json.dumps(contract, indent=2), encoding="utf-8")
+    
     return current_verilog, filepath
+
+
+def _build_port_contracts(rtl_dir: Path) -> str:
+    """Load all _meta.json files and format as port contracts."""
+    contracts = []
+    for meta_file in sorted(rtl_dir.glob("*_meta.json")):
+        meta = json.loads(meta_file.read_text())
+        module = meta["module"]
+        ports = meta["ports"]
+        port_lines = "\n".join(
+            f"  {p['direction']} {p['width']} {p['name']}"
+            for p in ports
+        )
+        contracts.append(f"// {module}\n{port_lines}")
+    return "=== EXACT PORT CONTRACTS ===\n" + "\n\n".join(contracts)
+
+def generate_top_v(
+    specs: str,
+    all_json_contracts: str,
+    rtl_context: list[dict],
+    knowledge_context: list[dict],
+) -> tuple[str, int]:
+    """Special generation for top.v using all sub-module JSONs."""
+    
+    # Overwrite the passed all_json_contracts with the newly constructed deterministic one
+    all_json_contracts = _build_port_contracts(RTL_DIR)
+    
+    rtl_ctx_text = _format_rtl_context(rtl_context)
+    know_ctx_text = _format_knowledge_context(knowledge_context)
+
+    prompt = f"""\
+Generate the top-level RV32I integration module `top.v`.
+
+USE THESE SUB-MODULE INTERFACE CONTRACTS FOR ALL WIRING:
+{all_json_contracts}
+
+SPECIFICATION:
+{specs}
+
+REFERENCE RTL (from RAG corpus):
+{rtl_ctx_text}
+
+KNOWLEDGE CONTEXT:
+{know_ctx_text}
+
+Requirements:
+1. Wire all modules exactly as defined in the JSON contracts.
+2. Return ONLY the complete Verilog code in a ```verilog block.
+3. Follow ALL rules in the hardware contract.
+"""
+    resp, tokens = _call_llm(GLOBAL_CONTRACT, [{"role": "user", "content": prompt}], MODEL)
+    return _extract_verilog(resp), tokens
 
 
 def fix_with_feedback(module_name: str, verilog: str, errors: list[str]) -> str:

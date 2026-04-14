@@ -4,12 +4,21 @@ data/chromadb/
 data/riscv-tests/
 data/chunk_summaries.json
 
+# Environment Variables
+.env
+.env.example
+
 # Python artifacts
 **/__pycache__/
 *.pyc
 .ipynb_checkpoints/
 
+# System
+scratch/
+simple_full_trace.txt
+
 # Distribution specific logs
 results/
 !results/summary.md
 !results/isa_results.md
+!results/generation_log.jsonl

@@ -1,0 +1,45 @@
+{
+  "module": "regfile",
+  "ports": [
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "clk"
+    },
+    {
+      "direction": "input",
+      "width": "[4:0]",
+      "name": "rs1"
+    },
+    {
+      "direction": "input",
+      "width": "[4:0]",
+      "name": "rs2"
+    },
+    {
+      "direction": "input",
+      "width": "[4:0]",
+      "name": "rd"
+    },
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "wdata"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "we"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "rdata1"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "rdata2"
+    }
+  ]
+}

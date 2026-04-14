@@ -7,6 +7,8 @@
 #include "verilated.h"
 #include <cstdio>
 #include <cstdlib>
+#include <iostream>
+#include <string>
 
 vluint64_t main_time = 0;
 
@@ -19,24 +21,35 @@ int main(int argc, char** argv) {
 
     Vtop* top = new Vtop;
 
-    // Assert reset, start with clock low
+    // Reset sequence
     top->clk = 0;
     top->rst = 1;
     top->eval();
 
-    // Reset sequence: 10 full clock cycles
-    for (int i = 0; i < 10; i++) {
-        top->clk = !top->clk; top->eval(); main_time++;
-        top->clk = !top->clk; top->eval(); main_time++;
+    for (int i = 0; i < 20; i++) {
+        top->clk = !top->clk;
+        top->eval();
+        main_time++;
     }
 
-    // Release reset
     top->rst = 0;
+    top->eval();
 
     // Run simulation
-    for (int i = 0; i < 500000; i++) {
-        top->clk = !top->clk; top->eval(); main_time++;
-        top->clk = !top->clk; top->eval(); main_time++;
+    int consecutive_pass = 0;
+    uint32_t last_pc = 0;
+    
+    // We run for a large number of cycles or until pass detection
+    for (int i = 0; i < 1000000; i++) {
+        top->clk = 1;
+        top->eval();
+        main_time++;
+
+        top->clk = 0;
+        top->eval();
+        main_time++;
+
+        if (Verilated::gotFinish()) break;
     }
 
     top->final();

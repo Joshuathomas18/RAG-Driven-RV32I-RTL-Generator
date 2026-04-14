@@ -1,0 +1,30 @@
+{
+  "module": "alu",
+  "ports": [
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "a"
+    },
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "b"
+    },
+    {
+      "direction": "input",
+      "width": "[3:0]",
+      "name": "alu_op"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "result"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "zero"
+    }
+  ]
+}
