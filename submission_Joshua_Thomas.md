@@ -16,6 +16,11 @@
 
 ## A. Corpus & Knowledge Base
 
+**Sources Used (The Golden Dataset)**
+To prevent semantic hallucinations during code generation, our primary corpus merged the theoretical with the practical:
+1. **The Official RISC-V Unprivileged ISA Specification**: Provided precise details on instruction encodings, immediate slicing, and ALU behaviors.
+2. **Reference RTL Dataset (`pipelined-rv32i`)**: This was our "golden dataset." During initial testing, the LLM hallucinated entirely invalid Verilog syntax. By directly ingesting heavily-validated open-source RISC-V core files (like `rv32i_alu.v` and `rv32i_system.sv`), the RAG could extract proven logic paths. Adding this exact baseline improved instruction accuracy drastically, giving the pipeline a grounded example of structural synthesizability.
+
 **Retrieval Approach**
 We used a hybrid deterministic + semantic retrieval strategy:
 - Deterministic: always fetch known-good modules by name 
