@@ -1,0 +1,45 @@
+{
+  "module": "csr_unit",
+  "ports": [
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "clk"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "rst"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "csr_we"
+    },
+    {
+      "direction": "input",
+      "width": "[11:0]",
+      "name": "csr_addr"
+    },
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "wdata"
+    },
+    {
+      "direction": "input",
+      "width": "[2:0]",
+      "name": "funct3"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "rdata"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "ecall"
+    }
+  ]
+}

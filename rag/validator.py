@@ -13,6 +13,10 @@ SIMULATION_RULES = {
             lambda v: "3'b010" not in v.split(".mem_op")[1][:20] if ".mem_op" in v else True,
             "LSU mem_op must not be hardcoded 3'b010",
         ),
+        # New Hardening Rules
+        (r"alu_in_a.*1100111|id_ex_opcode", "JALR must use forwarded alu_in_a and id_ex_opcode check"),
+        (r"branch_taken_ex", "PC mux must check branch_taken_ex"),
+        (r"mem\[.*17:2\]", "Memory index must use pc[17:2] not pc[11:2] or pc[9:2]"),
     ],
     "decoder": [
         (r"branch_funct3.*inst[r]?\[14:12\]", "branch_funct3 must be instr[14:12]"),

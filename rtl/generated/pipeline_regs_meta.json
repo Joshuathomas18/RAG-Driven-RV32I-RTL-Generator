@@ -1,0 +1,405 @@
+{
+  "module": "pipeline_regs",
+  "ports": [
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "clk"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "rst"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "stall_if_id"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "flush_if_id"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "stall_id_ex"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "flush_id_ex"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "flush_ex_mem"
+    },
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "if_pc"
+    },
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "if_instr"
+    },
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "id_rs1_data"
+    },
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "id_rs2_data"
+    },
+    {
+      "direction": "input",
+      "width": "[4:0]",
+      "name": "id_rs1_addr"
+    },
+    {
+      "direction": "input",
+      "width": "[4:0]",
+      "name": "id_rs2_addr"
+    },
+    {
+      "direction": "input",
+      "width": "[4:0]",
+      "name": "id_rd_addr"
+    },
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "id_imm"
+    },
+    {
+      "direction": "input",
+      "width": "[3:0]",
+      "name": "id_alu_op"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "id_alu_src"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "id_mem_write"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "id_mem_read"
+    },
+    {
+      "direction": "input",
+      "width": "[1:0]",
+      "name": "id_wb_sel"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "id_reg_write"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "id_branch"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "id_jump"
+    },
+    {
+      "direction": "input",
+      "width": "[2:0]",
+      "name": "id_branch_funct3"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "id_is_auipc"
+    },
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "id_pc_plus4"
+    },
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "ex_alu_result"
+    },
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "ex_rs2_data"
+    },
+    {
+      "direction": "input",
+      "width": "[4:0]",
+      "name": "ex_rd_addr"
+    },
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "ex_branch_target"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "ex_branch_taken"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "ex_mem_write"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "ex_mem_read"
+    },
+    {
+      "direction": "input",
+      "width": "[1:0]",
+      "name": "ex_wb_sel"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "ex_reg_write"
+    },
+    {
+      "direction": "input",
+      "width": "[2:0]",
+      "name": "ex_funct3"
+    },
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "ex_pc_plus4"
+    },
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "mem_alu_result"
+    },
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "mem_load_data"
+    },
+    {
+      "direction": "input",
+      "width": "[4:0]",
+      "name": "mem_rd_addr"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "mem_reg_write"
+    },
+    {
+      "direction": "input",
+      "width": "[1:0]",
+      "name": "mem_wb_sel"
+    },
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "mem_pc_plus4"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "if_id_pc"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "if_id_instr"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "id_ex_pc"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "id_ex_rs1_data"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "id_ex_rs2_data"
+    },
+    {
+      "direction": "output",
+      "width": "[4:0]",
+      "name": "id_ex_rs1_addr"
+    },
+    {
+      "direction": "output",
+      "width": "[4:0]",
+      "name": "id_ex_rs2_addr"
+    },
+    {
+      "direction": "output",
+      "width": "[4:0]",
+      "name": "id_ex_rd_addr"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "id_ex_imm"
+    },
+    {
+      "direction": "output",
+      "width": "[3:0]",
+      "name": "id_ex_alu_op"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "id_ex_alu_src"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "id_ex_mem_write"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "id_ex_mem_read"
+    },
+    {
+      "direction": "output",
+      "width": "[1:0]",
+      "name": "id_ex_wb_sel"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "id_ex_reg_write"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "id_ex_branch"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "id_ex_jump"
+    },
+    {
+      "direction": "output",
+      "width": "[2:0]",
+      "name": "id_ex_branch_funct3"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "id_ex_is_auipc"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "id_ex_pc_plus4"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "ex_mem_alu_result"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "ex_mem_rs2_data"
+    },
+    {
+      "direction": "output",
+      "width": "[4:0]",
+      "name": "ex_mem_rd_addr"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "ex_mem_branch_target"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "ex_mem_branch_taken"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "ex_mem_mem_write"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "ex_mem_mem_read"
+    },
+    {
+      "direction": "output",
+      "width": "[1:0]",
+      "name": "ex_mem_wb_sel"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "ex_mem_reg_write"
+    },
+    {
+      "direction": "output",
+      "width": "[2:0]",
+      "name": "ex_mem_funct3"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "ex_mem_pc_plus4"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "mem_wb_alu_result"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "mem_wb_load_data"
+    },
+    {
+      "direction": "output",
+      "width": "[4:0]",
+      "name": "mem_wb_rd_addr"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "mem_wb_reg_write"
+    },
+    {
+      "direction": "output",
+      "width": "[1:0]",
+      "name": "mem_wb_wb_sel"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "mem_wb_pc_plus4"
+    }
+  ]
+}

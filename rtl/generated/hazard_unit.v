@@ -1,4 +1,4 @@
-module hazard_unit (
+module hazard_unit(
   input  [4:0] id_ex_rs1,
   input  [4:0] id_ex_rs2,
   input  [4:0] ex_mem_rd,
@@ -30,35 +30,33 @@ module hazard_unit (
     // Load-use hazard detection
     if (id_ex_mem_read && id_ex_rd != 5'b0 && 
         (id_ex_rd == if_id_rs1 || id_ex_rd == if_id_rs2)) begin
-      pc_write = 1'b0;      // Stall PC
-      if_id_write = 1'b0;   // Stall IF/ID register
-      id_ex_flush = 1'b1;   // Insert bubble in ID/EX
+      pc_write = 1'b0;       // Stall PC
+      if_id_write = 1'b0;    // Stall IF/ID register
+      id_ex_flush = 1'b1;    // Insert bubble in ID/EX
     end
 
     // Branch flush
     if (branch_taken_ex) begin
-      if_id_flush = 1'b1;   // Flush IF/ID register
-      id_ex_flush = 1'b1;    // Flush ID/EX register
+      if_id_flush = 1'b1;    // Flush IF/ID register
+      id_ex_flush = 1'b1;     // Flush ID/EX register
     end
 
     // Forwarding logic
-    // Forward from EX/MEM
     if (ex_mem_reg_write && ex_mem_rd != 5'b0) begin
       if (ex_mem_rd == id_ex_rs1) begin
-        forward_a = 2'b01; // Forward from EX/MEM
+        forward_a = 2'b01;    // Forward from EX/MEM
       end
       if (ex_mem_rd == id_ex_rs2) begin
-        forward_b = 2'b01; // Forward from EX/MEM
+        forward_b = 2'b01;    // Forward from EX/MEM
       end
     end
 
-    // Forward from MEM/WB
     if (mem_wb_reg_write && mem_wb_rd != 5'b0) begin
       if (mem_wb_rd == id_ex_rs1 && !(ex_mem_reg_write && ex_mem_rd == id_ex_rs1)) begin
-        forward_a = 2'b10; // Forward from MEM/WB
+        forward_a = 2'b10;    // Forward from MEM/WB
       end
       if (mem_wb_rd == id_ex_rs2 && !(ex_mem_reg_write && ex_mem_rd == id_ex_rs2)) begin
-        forward_b = 2'b10; // Forward from MEM/WB
+        forward_b = 2'b10;    // Forward from MEM/WB
       end
     end
   end

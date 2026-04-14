@@ -1,0 +1,55 @@
+{
+  "module": "branch_unit",
+  "ports": [
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "pc"
+    },
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "rs1"
+    },
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "rs2"
+    },
+    {
+      "direction": "input",
+      "width": "[31:0]",
+      "name": "imm"
+    },
+    {
+      "direction": "input",
+      "width": "[2:0]",
+      "name": "funct3"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "is_branch"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "is_jal"
+    },
+    {
+      "direction": "input",
+      "width": "1",
+      "name": "is_jalr"
+    },
+    {
+      "direction": "output",
+      "width": "[31:0]",
+      "name": "branch_target"
+    },
+    {
+      "direction": "output",
+      "width": "1",
+      "name": "branch_taken"
+    }
+  ]
+}

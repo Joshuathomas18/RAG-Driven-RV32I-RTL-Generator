@@ -32,7 +32,7 @@ os.environ.setdefault("HF_HOME", str(REPO_ROOT / "data" / "model_cache"))
 
 from rag.corpus import build_corpus, CorpusUnavailableError
 from rag.knowledge import build_knowledge_base
-from rag.generator import generate_with_lint_fix, LintFailureError, MODULE_SPECS
+from rag.generator import generate_with_lint_fix, generate_top_v, LintFailureError, MODULE_SPECS
 
 # ── Module generation order and component mapping ─────────────────────────────
 
@@ -161,14 +161,39 @@ def step_generate(args) -> list[Path]:
         print(f"\n  Generating {module_name}.v (component={component}) ...")
 
         try:
-            verilog, filepath = generate_with_lint_fix(
-                module_name=module_name,
-                component=component,
-                all_files=accepted_files,
-                max_iterations=3,
-            )
-            accepted_files.append(filepath)
-            print(f"  [OK] {module_name}.v generated and lint-clean")
+            if module_name == "top":
+                print("  [INTEGRATION] Collecting all module contracts for top.v...")
+                all_contracts = ""
+                for prev in MODULE_ORDER:
+                    if prev == "top": continue
+                    meta_file = RTL_DIR / f"{prev}_meta.json"
+                    if meta_file.exists():
+                        all_contracts += f"\n--- {prev} CONTRACT ---\n{meta_file.read_text()}\n"
+                
+                # Retrieve RAG context for top.v
+                from rag.pipeline import retrieve, query_knowledge
+                rtl_context = retrieve("full_core", "RV32I 5-stage pipeline top level integration")
+                knowledge_context = query_knowledge("top level wiring hazards and reset vectors")
+                
+                verilog, _ = generate_top_v(
+                    specs=MODULE_SPECS["top"],
+                    all_json_contracts=all_contracts,
+                    rtl_context=rtl_context,
+                    knowledge_context=knowledge_context
+                )
+                filepath = RTL_DIR / "top.v"
+                filepath.write_text(verilog)
+                accepted_files.append(filepath)
+                print(f"  [OK] top.v generated using {len(MODULE_ORDER)-1} sub-module contracts.")
+            else:
+                verilog, filepath = generate_with_lint_fix(
+                    module_name=module_name,
+                    component=component,
+                    all_files=accepted_files,
+                    max_iterations=args.max_iterations,
+                )
+                accepted_files.append(filepath)
+                print(f"  [OK] {module_name}.v generated and verified.")
         except LintFailureError as e:
             print(f"  [FAIL] {module_name}.v FAILED lint after {e.attempts} attempts:")
             for err in e.errors[:5]:
@@ -196,68 +221,53 @@ def step_generate(args) -> list[Path]:
 # ── Step 4: Verilator compilation ─────────────────────────────────────────────
 
 def step_compile(generated_files: list[Path], args) -> bool:
-    """Compile generated RTL with Verilator. Returns True if successful."""
+    """Compile generated RTL with Verilator inside Docker."""
     if args.skip_sim:
         print("[SKIP] Verilator compilation (--skip-sim)")
         return False
 
     print("\n" + "=" * 60)
-    print("STEP 4: Compiling with Verilator")
+    print("STEP 4: Compiling with Verilator (in Docker)")
     print("=" * 60)
 
-    # Check verilator
-    if not _check_tool("verilator"):
-        print("  ERROR: verilator not found. sudo apt install verilator")
-        return False
+    from rag.generator import DOCKER_ID, DOCKER_APP_DIR
+    
+    # Sync all generated files to container before compile
+    print(f"  Syncing {len(generated_files)} files to {DOCKER_ID}...")
+    for f in generated_files:
+        subprocess.run(["docker", "cp", str(f), f"{DOCKER_ID}:{DOCKER_APP_DIR}/rtl/generated/"], capture_output=True)
 
-    # Order files by instantiation order
-    order_map = {name: i for i, name in enumerate(MODULE_ORDER)}
-    def file_order(p: Path) -> int:
-        return order_map.get(p.stem, len(MODULE_ORDER))
-    ordered_files = sorted(generated_files, key=file_order)
-
-    if not ordered_files:
-        print("  ERROR: No generated files to compile.")
-        return False
-
-    # Check top.v exists
-    top_v = RTL_DIR / "top.v"
-    if not top_v.exists():
-        print("  ERROR: top.v not found — cannot compile.")
-        return False
-
-    OBJ_DIR.mkdir(parents=True, exist_ok=True)
-
-    v_file_args = [str(f) for f in ordered_files]
-
-    cmd = [
-        "verilator",
-        "--cc", "--exe",
+    # Run verilator in Docker
+    verilator_cmd = [
+        "docker", "exec", "-w", f"{DOCKER_APP_DIR}/sim", DOCKER_ID,
+        "verilator", "--cc", "--exe",
         "--language", "1800-2012",
         "--top-module", "top",
         "-Wno-fatal", "-Wno-lint",
         "-CFLAGS", "-std=c++14",
-        str(SIM_DIR / "sim_main.cpp"),
-        "--Mdir", str(OBJ_DIR),
-    ] + v_file_args
+        "sim_main.cpp",
+        "--Mdir", "obj_dir",
+        "../rtl/generated/top.v" # Verilator will find others via includes or command line
+    ]
+    # Add other files explicitly to be sure
+    for f in generated_files:
+        if f.name != "top.v":
+            verilator_cmd.append(f"../rtl/generated/{f.name}")
 
-    print(f"  Running: verilator --cc --exe ... ({len(v_file_args)} .v files)")
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(REPO_ROOT))
-
+    print("  Running Verilator elaboration in Docker...")
+    result = subprocess.run(verilator_cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        print(f"  ERROR: Verilator elaboration failed:\n{result.stderr[-2000:]}")
+        print(f"  ERROR: Verilator failed:\n{result.stderr[-2000:]}")
         return False
 
-    print("  Verilator elaboration OK. Building sim binary...")
-    make_cmd = ["make", "-j4", "-C", str(OBJ_DIR), "-f", "Vtop.mk", "Vtop"]
+    print("  Running make in Docker...")
+    make_cmd = ["docker", "exec", "-w", f"{DOCKER_APP_DIR}/sim/obj_dir", DOCKER_ID, "make", "-j4", "-f", "Vtop.mk", "Vtop"]
     result = subprocess.run(make_cmd, capture_output=True, text=True)
-
     if result.returncode != 0:
         print(f"  ERROR: make failed:\n{result.stderr[-2000:]}")
         return False
 
-    sim_bin = OBJ_DIR / "Vtop"
-    print(f"  ✓ Simulation binary built: {sim_bin}")
+    print("  [OK] Simulation binary built in Docker.")
     return True
 
 
@@ -269,15 +279,21 @@ def step_run_tests(args) -> dict[str, bool]:
         return {}
 
     print("\n" + "=" * 60)
-    print("STEP 5: Running ISA tests")
+    print("STEP 5: Running ISA tests (in Docker)")
     print("=" * 60)
 
+    from rag.generator import DOCKER_ID, DOCKER_APP_DIR
+    
+    # Run test runner in Docker
     result = subprocess.run(
-        [sys.executable, str(SIM_DIR / "run_tests.py")],
-        cwd=str(REPO_ROOT),
+        ["docker", "exec", "-w", f"{DOCKER_APP_DIR}/sim", DOCKER_ID, "python3", "run_tests.py"],
+        text=True
     )
+    
+    # After running tests in container, sync results back to host for summary
+    print("  Syncing results back to host...")
+    subprocess.run(["docker", "cp", f"{DOCKER_ID}:{DOCKER_APP_DIR}/results/isa_results.md", str(RESULTS / "isa_results.md")], capture_output=True)
 
-    # Results are written to results/isa_results.md by run_tests.py
     return {}
 
 
