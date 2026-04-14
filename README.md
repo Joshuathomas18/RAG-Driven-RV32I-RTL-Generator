@@ -2,31 +2,43 @@
 
 A RAG (Retrieval-Augmented Generation) pipeline that generates correct Verilog RTL for a 5-stage in-order RV32I processor, verifies every file with Verilator lint (automated fix loop), simulates with Verilator, and validates against 42 riscv-tests.
 
-```
-                 ┌──────────────┐
-  RTL Sources    │  ChromaDB    │
-  PicoRV32  ───► │  rtl_corpus  │
-  Ibex      ───► │  (CodeBERT)  │◄─── retrieve(component, query)
-  Angelo    ───► │              │
-                 └──────────────┘          ┌─────────────────┐
-                                           │  LLM Generator  │
-                 ┌──────────────┐          │  claude-sonnet  │
-  Bug Patterns  │  knowledge_  │          │  temp=0.05      │
-  Debug Lessons ►│  corpus      │◄─────────│  max_tokens=6k  │
-  Angelo Hints  │  (MiniLM)    │          └────────┬────────┘
-                 └──────────────┘                   │
-                                                    ▼
-                                           ┌─────────────────┐
-                                           │  Verilator Lint │
-                                           │  Fix Loop       │
-                                           │  (max 5 iters)  │
-                                           └────────┬────────┘
-                                                    │ .v files
-                                                    ▼
-                                           ┌─────────────────┐
-                                           │  Verilator Sim  │
-                                           │  42 ISA Tests   │
-                                           └─────────────────┘
+```text
+                 ┌──────────────────────────────────────────────────┐
+                 │                RETRIEVAL PIPELINE                │
+  Corpus         │                                                  │
+                 │ ┌──────────────┐     ┌────────────────┐          │
+ pipelined-rv32i ──►  rtl_corpus  ├────►│  RRF (k=60)    │          │
+ (Golden Repo)   │ │  (CodeBERT)  │     │  BM25 + Dense  │          │
+                 │ └──────────────┘     └───────┬────────┘          │
+                 │                              │                   │
+                 │ ┌──────────────┐     ┌───────▼────────┐          │
+  Bug Patterns  ───►  knowledge_  │     │ Cross-Encoder  │◄── query │
+  ISA Spec       │ │  corpus      ├────►│  Re-Ranker     │          │
+                 │ │  (MiniLM)    │     │  (ms-marco)    │          │
+                 │ └──────────────┘     └───────┬────────┘          │
+                 └──────────────────────────────┼───────────────────┘
+                                                │ context
+                                                ▼
+                 ┌──────────────────────────────────────────────────┐
+                 │           TWO-PHASE LLM GENERATOR                │
+                 │                                                  │
+                 │  ┌────────────────┐         ┌─────────────────┐  │
+                 │  │    Phase 1     │ strict  │     Phase 2     │  │
+                 │  │ JSON Interface ├────────►│  Verilog Body   │  │
+                 │  │ Contract Gen   │ bounds  │  Generation     │  │
+                 │  └────────────────┘         └───────┬─────────┘  │
+                 └─────────────────────────────────────┼────────────┘
+                                                       │ .v files
+                                                       ▼
+                 ┌──────────────────────────────────────────────────┐
+                 │             VERIFICATION & SIMULATION            │
+                 │                                                  │
+                 │  ┌────────────────┐         ┌─────────────────┐  │
+                 │  │ Verilator Lint │ syntax  │  Verilator Sim  │  │
+                 │  │ Automated Fix  ├────────►│  C++ Testbench  │  │
+                 │  │ Loop (Max 5)   │ passed  │  Detect JAL-loop│  │
+                 │  └────────────────┘         └─────────────────┘  │
+                 └──────────────────────────────────────────────────┘
 ```
 
 ## Prerequisites
