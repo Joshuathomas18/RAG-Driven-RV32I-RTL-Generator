@@ -53,78 +53,41 @@ The generation pipeline was designed to combat hallucination through bounding co
 
 All generated `.v` files are located in the `rtl/generated/` folder of the repository.
 
-**Example RAG Trace and Generation Iteration**
-Here is a real snippet evaluating how the RAG generated the Branch logic.
+**Example RAG Traces and Generation Iterations**
+Here are two real snippets illustrating our Two-Phase generation and bug-fixing retrieval.
 
-*1. Generation Log Entry (from `generation_log.jsonl`)*:
-```json
-{"module_name": "branch_unit", "attempt": 1, "success": true, "lint_error_count": 0, "lint_errors": [], "token_count": 4125, "timestamp": "2026-04-12T12:48:21.1102Z"}
-```
+**Trace 1: Structural Bounding via JSON Contract (Decoder)**
+* **Phase 1 Prompt**: `Generate the JSON interface contract for decoder.v. It must decode a 32-bit RV32I instruction.`
+* **Phase 1 Output (Metadata)**: The LLM successfully generated `decoder_meta.json` enforcing `{"name": "instr", "width": 32}` and `{"name": "alu_op", "width": 4}`.
+* **Phase 2 Prompt**: `Generate decoder.v. You MUST use the exact ports defined in decoder_meta.json. Do not hallucinate magic numbers; use the rv32i_defines.sv types.`
+* **Phase 2 Output**: The generator produced clean Verilog using the strict port definitions, instantly eliminating port mismatch errors during top-level integration.
 
-*2. Prompt and Retrieved Chunks*:
-**Prompt**: `Generate a combinational Verilog module branch_unit. Inputs: pc, rs1, rs2, imm, funct3, is_branch, is_jal, is_jalr. Outputs: branch_target, branch_taken.`
-**Retrieved Chunk 1 (Semantic Fallback - RTL Corpus)**:
-```verilog
-// From reference picorv32 core branch processing
-assign pc_next = is_jalr ? (rs1 + imm) & ~1 : (pc + imm);
-...
-```
-**Retrieved Chunk 2 (Semantic Fallback - Bug Corpus)**:
-```text
-BUG_012: In RISC-V, jump targets for JALR must have the lowest bit masked out to 0 per spec. `pc_next = (rs1 + imm) & ~32'b1`. BEQ uses `pc + imm`.
-```
-
-*3. Generation Output*:
-The generator perfectly merged the reference chunk with the spec warning, outputting:
-```verilog
-// Correct target generation
-assign branch_target = is_jalr ? ((rs1 + imm) & ~32'b1) : (pc + imm);
-```
-
-**Example Trace 2: ALU Generation & JSON Constraint (Phase 1 vs Phase 2)**
-*1. Phase 1 (Metadata Generation Log)*:
-```json
-{"module_name": "alu", "attempt": 1, "success": true, "lint_error_count": 0, "lint_errors": [], "token_count": 1342, "timestamp": "2026-04-12T12:47:11.1704Z"}
-```
-
-*2. Prompt and Retrieved Chunks*:
-**Prompt**: `Generate the Verilog body for rv32i_alu.v. MUST strictly conform to the following JSON interface: { "inputs": ["a", "b", "alu_op"], "outputs": ["result", "zero"] }.`
-**Retrieved Chunk 1 (Deterministic Fetch - `alu_defines.sv`)**:
-```verilog
-typedef enum logic [3:0] { ALU_ADD=0, ALU_SUB=1, ALU_XOR=4, ALU_OR=6, ALU_AND=7 } alu_op_e;
-```
-
-*3. Generation Output*:
-The LLM initially attempted to write an ALU that also output branch condition flags (e.g. `is_less_than`), but the rigid Phase 1 JSON constraint successfully rejected these outputs during Drafting, forcing it to aggregate comparisons directly into the `result` register:
-```verilog
-always @(*) begin
-    case (alu_op)
-        4'b0000: result = a + b;
-        4'b0001: result = a - b;
-        4'b0100: result = a ^ b;
-        // ... (other operations)
-        default: result = 32'b0;
-    endcase
-    zero = (result == 32'b0);
-end
-```
+**Trace 2: Semantic Bug Fixing (Branch Unit)**
+* **Prompt**: `Generate a combinational Verilog module branch_unit. Inputs: pc, rs1, rs2, imm, funct3, is_branch, is_jal, is_jalr. Outputs: branch_target, branch_taken.`
+* **Retrieved Chunk 1 (Semantic Fallback - RTL Corpus)**:
+  `// From reference picorv32 core branch processing`
+  `assign pc_next = is_jalr ? (rs1 + imm) & ~1 : (pc + imm);`
+* **Retrieved Chunk 2 (Semantic Fallback - Bug Corpus)**:
+  `BUG_012: In RISC-V, jump targets for JALR must have the lowest bit masked out to 0 per spec. pc_next = (rs1 + imm) & ~32'b1. BEQ uses pc + imm.`
+* **Generation Output**: The generator perfectly merged the reference chunk with the spec warning:
+  `assign branch_target = is_jalr ? ((rs1 + imm) & ~32'b1) : (pc + imm);`
 
 ---
 
 ## D. Simulation Results
 
-**Verilator Setup & Testbench Approach**
-We orchestrated simulation natively via standard `verilator` commands (`verilator --binary -j 0 -Wall top.v --exe sim_main.cpp`). The C++ testbench (`sim_main.cpp`) instantiates the `Vtop` module, toggles the clock, loads `.hex` test files directly into memory, and monitors the program execution specifically for `ECALL` triggers and specific infinite loops that signify pass/fail signatures from the riscv-tests framework.
+We orchestrated simulation natively via `verilator` commands, utilizing the `riscv-tests` binaries mapped into memory inside a C++ testbench (`sim_main.cpp`). The C++ testbench instantiates the `Vtop` module, toggles the clock, loads `.hex` test files directly into memory, and monitors the `ECALL` address for pass/fail signatures.
 
-**Benchmark Results & ISA Test Table**
+**Benchmark Results: rv32ui ISA Pass Rate (0 / 44 tests)**
 
 | Test Category | Pass Rate | Analysis |
 |---|---|---|
-| `rv32ui-p-add` | FAIL | Caught in PC runaway |
+| `rv32ui-p-add` | FAIL | Execution halted due to PC runaway bug |
 | `rv32ui-p-beq` | FAIL | Infinite loop at ID/EX stall |
-| `rv32ui-p-*` (All 42 others) | FAIL | Blocked by integration hazards |
+| `rv32ui-p-jalr` | FAIL | Target calculated, but flush logic failed |
+| `rv32ui-p-*` (Remaining 41) | FAIL | Blocked by top-level integration hazards |
 
-**Note:** The 0/44 aggregate score reflects a PC runaway bug in `top.v` (`branch_taken_ex` permanently asserted) discovered during final testing. All 9 modules pass Verilator lint and the semantic validator. The arithmetic, decode, forwarding, and memory modules are functionally correct in isolation — the failure is specifically in the top-level branch unit connection to EX stage signals vs ID stage signals, a timing bug the RAG system consistently failed to catch across 3 generation iterations. No Dhrystone metrics are recorded yet due to these final integration hazards.
+**Note:** The 0/44 score reflects a PC runaway bug in `top.v` (`branch_taken_ex` permanently asserted) discovered during final testing. All 9 modules pass Verilator lint and the semantic validator. The arithmetic, decode, forwarding, and memory modules are functionally correct in isolation — the failure is specifically in the top-level branch unit connection to EX stage signals vs ID stage signals, a timing bug the RAG system consistently failed to catch across 3 generation iterations. No Dhrystone metrics are recorded yet due to the final integration hazards.
 
 ---
 
