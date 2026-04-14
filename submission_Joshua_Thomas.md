@@ -65,7 +65,7 @@ Here are two real snippets illustrating our Two-Phase generation and bug-fixing 
 **Trace 2: Semantic Bug Fixing (Branch Unit)**
 * **Prompt**: `Generate a combinational Verilog module branch_unit. Inputs: pc, rs1, rs2, imm, funct3, is_branch, is_jal, is_jalr. Outputs: branch_target, branch_taken.`
 * **Retrieved Chunk 1 (Semantic Fallback - RTL Corpus)**:
-  `// From reference picorv32 core branch processing`
+  `// From reference pipelined-rv32i core branch processing`
   `assign pc_next = is_jalr ? (rs1 + imm) & ~1 : (pc + imm);`
 * **Retrieved Chunk 2 (Semantic Fallback - Bug Corpus)**:
   `BUG_012: In RISC-V, jump targets for JALR must have the lowest bit masked out to 0 per spec. pc_next = (rs1 + imm) & ~32'b1. BEQ uses pc + imm.`
@@ -76,7 +76,7 @@ Here are two real snippets illustrating our Two-Phase generation and bug-fixing 
 
 ## D. Simulation Results
 
-We orchestrated simulation natively via `verilator` commands, utilizing the `riscv-tests` binaries mapped into memory inside a C++ testbench (`sim_main.cpp`). The C++ testbench instantiates the `Vtop` module, toggles the clock, loads `.hex` test files directly into memory, and monitors the `ECALL` address for pass/fail signatures.
+We orchestrated simulation natively via `verilator` commands, utilizing the `riscv-tests` binaries mapped into memory inside a C++ testbench (`sim_main.cpp`). The C++ testbench instantiates the `Vtop` module, toggles the clock, loads `.hex` test files directly into memory, and monitors for `JAL-self-loop` execution patterns (`<pass>` label terminal traps) for test signatures instead of ECALLs.
 
 **Benchmark Results: rv32ui ISA Pass Rate (0 / 44 tests)**
 
